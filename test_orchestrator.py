@@ -142,3 +142,24 @@ def test_game_preset_launches_the_game_not_the_preset():
         out = run({"action": "run_preset", "preset": "play_game", "game": game})
         assert "Elden Ring" in out
         assert launch.call_args.args[0]["linux"] == game["linux"]
+
+
+def test_options_block_parsed_and_malformed_dropped():
+    import solution_picker as sp
+    text, ch = sp.parse_options('Duas saidas.\n```options {"question": "Qual?", "options": ["A", "B"]}```')
+    assert text == "Duas saidas." and ch == {"question": "Qual?", "options": ["A", "B"]}
+    assert sp.parse_options('```options {"options": ["so uma"]}```')[1] is None
+    assert sp.parse_options("sem bloco") == ("sem bloco", None)
+
+
+def test_picked_option_triggers_one_followup_on_stdin():
+    first = mock.Mock(stdout='x\n```options {"question": "Q", "options": ["A", "B"]}```', stderr="")
+    second = mock.Mock(stdout="feito com B", stderr="")
+    with mock.patch("shutil.which", return_value="claude"), \
+         mock.patch("subprocess.run", side_effect=[first, second]) as sub:
+        assert o.escalate("tarefa", CFG, pick=lambda q, opts: 1) == "feito com B"
+        assert sub.call_count == 2
+        assert "--continue" in sub.call_args.args[0] and "B" in sub.call_args.kwargs["input"]
+    with mock.patch("shutil.which", return_value="claude"), mock.patch("subprocess.run", side_effect=[first]) as sub:
+        o.escalate("tarefa", CFG, pick=lambda q, opts: None)  # cancelled: no follow-up
+        assert sub.call_count == 1

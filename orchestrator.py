@@ -16,6 +16,7 @@ from pathlib import Path
 import game_indexer
 import laya
 import os_adapter
+import solution_picker
 
 HERE = Path(__file__).parent
 PENDING = HERE / "presets.pending.json"
@@ -30,7 +31,9 @@ WRAPPER = """{task}
 Se esta tarefa for simples, repetivel, sem argumentos variaveis e puder virar um atalho local,
 termine a resposta com UM bloco ```preset {{"name": "snake_case", "description": "frase curta",
 "linux": ["comando", "arg"], "windows": ["comando", "arg"]}}```. Uma lista de argumentos, sem shell.
-Caso contrario, nao inclua o bloco."""
+Caso contrario, nao inclua o bloco.
+Se houver varias solucoes realmente distintas e a escolha for do usuario, NAO implemente nenhuma: termine com UM bloco
+```options {{"question": "pergunta curta", "options": ["solucao 1", "solucao 2"]}}``` (2 a 9 opcoes curtas)."""
 
 
 def load_config(path: Path = HERE / "presets.json") -> dict:
@@ -134,7 +137,7 @@ def approve(cfg_path: Path = HERE / "presets.json", ask=input) -> int:
     return added
 
 
-def escalate(task: str, cfg: dict) -> str:
+def escalate(task: str, cfg: dict, pick=None) -> str:
     """Hand the task to Claude Code headless. Task goes via stdin so it can never be read as a flag."""
     esc = cfg["escalation"]
     claude = shutil.which("claude")
@@ -146,7 +149,14 @@ def escalate(task: str, cfg: dict) -> str:
     workdir = (HERE / Path(esc["workdir"]).expanduser()).resolve()
     res = subprocess.run(argv, input=WRAPPER.format(task=task), cwd=workdir, capture_output=True,
                          text=True, timeout=esc["timeout_s"])
-    return save_proposals((res.stdout or res.stderr).strip(), cfg)
+    out, choice = solution_picker.parse_options((res.stdout or res.stderr).strip())
+    if choice and pick:
+        i = pick(choice["question"], choice["options"])
+        if i is not None:  # one follow-up in the same conversation; the option text is data, sent on stdin
+            res = subprocess.run([*argv, "--continue"], input=f"Escolha do usuario: {choice['options'][i]}. Prossiga com essa opcao.",
+                                 cwd=workdir, capture_output=True, text=True, timeout=esc["timeout_s"])
+            out = (res.stdout or res.stderr).strip()
+    return save_proposals(out, cfg)
 
 
 def log(entry: dict) -> None:
@@ -170,7 +180,7 @@ def confirmed(question: str, yes: bool) -> bool:
     return res.stdout.strip().lower() in ("s", "y", "sim", "yes")
 
 
-def handle(text: str, cfg: dict, decide=laya_decide, dry_run=False, yes=False, yes_escalate=False, confirm=None) -> str:
+def handle(text: str, cfg: dict, decide=laya_decide, dry_run=False, yes=False, yes_escalate=False, confirm=None, pick=None) -> str:
     """confirm: optional callable(question)->bool (e.g. the voice overlay); default is terminal/AGENT_CONFIRM_CMD."""
     ask = confirmed if confirm is None else (lambda q, y: y or confirm(q))
     try:
@@ -198,7 +208,7 @@ def handle(text: str, cfg: dict, decide=laya_decide, dry_run=False, yes=False, y
         if dry_run:
             out += " (dry-run)"
         elif ask(question, yes_escalate):
-            out = escalate(decision["task"], cfg)
+            out = escalate(decision["task"], cfg, pick)
         else:
             out += " (cancelado)"
     log({"action": action, "preset": decision.get("preset"), "input_len": len(text), "dry_run": dry_run})
@@ -217,6 +227,7 @@ if __name__ == "__main__":
     if a.approve:
         print(f"{approve()} preset(s) adicionados")
     elif a.text:
-        print(handle(a.text, load_config(), dry_run=a.dry_run, yes=a.yes, yes_escalate=a.yes_escalate))
+        print(handle(a.text, load_config(), dry_run=a.dry_run, yes=a.yes, yes_escalate=a.yes_escalate,
+                     pick=solution_picker.terminal_pick if sys.stdin.isatty() else None))
     else:
         ap.error("informe o texto ou --approve")

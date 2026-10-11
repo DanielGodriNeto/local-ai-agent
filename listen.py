@@ -141,7 +141,8 @@ def session(ui: overlay.Overlay, cfg: dict, blocks: Optional[Iterator[np.ndarray
                 ui.status("TRABALHANDO", overlay.IDLE)
             return ok
 
-        out = o.handle(text, cfg, decide=decide, confirm=confirm)
+        out = o.handle(text, cfg, decide=decide, confirm=confirm,
+                       pick=lambda q, opts: ui.choose(q, opts))
         ui.status("PRONTO", overlay.GREEN)
         out = out.strip()[:600]
         ui.text(out or "Feito.")
