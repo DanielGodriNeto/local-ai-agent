@@ -163,3 +163,24 @@ def test_picked_option_triggers_one_followup_on_stdin():
     with mock.patch("shutil.which", return_value="claude"), mock.patch("subprocess.run", side_effect=[first]) as sub:
         o.escalate("tarefa", CFG, pick=lambda q, opts: None)  # cancelled: no follow-up
         assert sub.call_count == 1
+
+
+def test_screen_request_confirms_then_sends_untrusted_text_on_stdin():
+    import screen
+    fake = mock.Mock(stdout="resumo", stderr="")
+    with mock.patch("screen.capture", return_value=object()), mock.patch("screen.ocr_text", return_value="SEGREDO na tela"), \
+         mock.patch("monitors.list_monitors", return_value=[{"n": 1, "x": 0, "y": 0, "w": 1, "h": 1}]), \
+         mock.patch("shutil.which", return_value="claude"), mock.patch("subprocess.run", return_value=fake) as sub:
+        assert "cancelado" in o.handle("o que tem na tela", CFG, confirm=lambda q: "SEGREDO" in q and False)
+        sub.assert_not_called()  # nothing leaves the PC without a yes
+        assert o.handle("o que tem na tela", CFG, yes_escalate=True) == "resumo"
+        assert "SEGREDO" in sub.call_args.kwargs["input"] and "SEGREDO" not in " ".join(sub.call_args.args[0])
+
+
+def test_screen_parse_and_missing_monitor():
+    import screen
+    assert screen.parse_request("o que tem no monitor 2") == {"monitor": 2, "image": False}
+    assert screen.parse_request("olha o segundo monitor")["image"] is True
+    assert screen.parse_request("abre o navegador") is None
+    with mock.patch("monitors.list_monitors", return_value=[{"n": 1}]):
+        assert "nao existe" in o.handle("le o monitor 3", CFG, yes_escalate=True)

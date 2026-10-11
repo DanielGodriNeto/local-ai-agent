@@ -24,6 +24,13 @@ python orchestrator.py "abre o navegador" --dry-run   # text mode
 Hyprland: `bind = SUPER, V, exec, ~/.config/local-ai-agent/voice_trigger.sh`
 Windows: `python hotkey_windows.py` (Win+F12, easy to bind to a mouse button; Win+V is reserved by Windows)
 
+## Screen reading
+
+Monitors are numbered: **1 = primary**, the rest left to right (`python monitors.py` lists them). Ask by voice:
+"o que tem no monitor 2" (local OCR via RapidOCR, sends text) or "olha o monitor 2" (sends the image). Nothing is captured
+unless you ask. You always confirm first; the confirmation shows the text that would leave your PC. Screen content is
+passed to Claude Code as untrusted data (read-only tools, image saved only to a private temp folder and deleted).
+
 ## Appearance
 
 `python settings.py` opens a live-preview window: size, font, colors, max width, and you can **drag** the two overlays (main and corner) to position them. Saved to `config.json` (git-ignored).
