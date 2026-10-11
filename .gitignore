@@ -4,3 +4,5 @@ __pycache__/
 models/
 presets.pending.json
 games.json
+config.json
+assets/cache/

@@ -154,7 +154,7 @@ def session(ui: overlay.Overlay, cfg: dict, blocks: Optional[Iterator[np.ndarray
 
 def main() -> None:
     cfg = o.load_config()
-    ui = overlay.Overlay(cfg["voice"].get("font", ""))
+    ui = overlay.Overlay()
     threading.Thread(target=session, args=(ui, cfg), daemon=True).start()
     ui.run()
 

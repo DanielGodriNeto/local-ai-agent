@@ -4,3 +4,4 @@ numpy
 faster-whisper
 sounddevice
 pytest
+pillow

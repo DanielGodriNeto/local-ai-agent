@@ -1,0 +1,8 @@
+{
+  "hooks": {
+    "UserPromptSubmit": [{"hooks": [{"type": "command", "command": "python /path/to/local-ai-agent/dev_overlay.py hook"}]}],
+    "PreToolUse": [{"matcher": "*", "hooks": [{"type": "command", "command": "python /path/to/local-ai-agent/dev_overlay.py hook"}]}],
+    "Notification": [{"hooks": [{"type": "command", "command": "python /path/to/local-ai-agent/dev_overlay.py hook"}]}],
+    "Stop": [{"hooks": [{"type": "command", "command": "python /path/to/local-ai-agent/dev_overlay.py hook"}]}]
+  }
+}

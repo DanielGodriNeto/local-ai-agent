@@ -1,0 +1,24 @@
+{
+  "ui": {
+    "font": "",
+    "colors": {
+      "bg": "#05070d",
+      "fg": "#e6fbff",
+      "hint": "#4a7d86",
+      "idle": "#fcee0a",
+      "accent": "#00f0ff",
+      "error": "#ff2a6d"
+    },
+    "main": {
+      "anchor": "n", "x_pct": 50, "y_pct": 5,
+      "size_max": 68, "size_min": 22, "min_width": 460, "max_width_pct": 72,
+      "radius": 34, "pad": 48, "logo_px": 76
+    },
+    "corner": {
+      "anchor": "se", "x_pct": 98, "y_pct": 95,
+      "size_max": 26, "size_min": 14, "min_width": 280, "max_width_pct": 30,
+      "radius": 24, "pad": 22, "logo_px": 40
+    }
+  },
+  "dev_overlay": {"port": 47635, "idle_exit_s": 120, "done_hold_s": 5, "ask_hold_s": 45}
+}
