@@ -22,6 +22,7 @@ python orchestrator.py "abre o navegador" --dry-run   # text mode
 ```
 
 Hyprland: `bind = SUPER, V, exec, ~/.config/local-ai-agent/voice_trigger.sh`
+Windows: `python hotkey_windows.py` (Win+Alt+V; Win+V is reserved by Windows for clipboard history)
 
 ## Appearance
 
