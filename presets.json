@@ -1,0 +1,33 @@
+{
+  "decider": {
+    "model": "qwen2.5-coder:7b",
+    "url": "http://localhost:11434/api/chat",
+    "timeout_s": 60
+  },
+  "escalation": {
+    "workdir": "~",
+    "allowed_tools": ["Read", "Grep", "Glob"],
+    "permission_mode": "default",
+    "timeout_s": 600
+  },
+  "presets": {
+    "open_browser": {
+      "description": "Abre o navegador padrao",
+      "confirm": false,
+      "linux": ["xdg-open", "https://duckduckgo.com"],
+      "windows": ["cmd", "/c", "start", "", "https://duckduckgo.com"]
+    },
+    "open_terminal": {
+      "description": "Abre um terminal",
+      "confirm": false,
+      "linux": ["alacritty"],
+      "windows": ["cmd", "/c", "start", "cmd"]
+    },
+    "lock_screen": {
+      "description": "Trava a tela",
+      "confirm": true,
+      "linux": ["loginctl", "lock-session"],
+      "windows": ["rundll32.exe", "user32.dll,LockWorkStation"]
+    }
+  }
+}
