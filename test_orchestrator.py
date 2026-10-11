@@ -114,3 +114,15 @@ def test_approve_merges_only_accepted(tmp_path):
         pending.write_text(json.dumps([{"name": "open_notes", "description": "Abre notas", "linux": ["gedit"]}]))
         assert o.approve(cfg_path, ask=lambda _: "s") == 1
     assert json.loads(cfg_path.read_text())["presets"]["open_notes"]["confirm"] is False
+
+
+def test_confirm_cmd_used_without_tty(monkeypatch):
+    monkeypatch.setattr("sys.stdin", mock.Mock(isatty=lambda: False))
+    monkeypatch.delenv("AGENT_CONFIRM_CMD", raising=False)
+    assert o.confirmed("q", False) is False
+    monkeypatch.setenv("AGENT_CONFIRM_CMD", "confirm.sh")
+    with mock.patch("subprocess.run", return_value=mock.Mock(stdout="Sim\n")) as sub:
+        assert o.confirmed("q", False) is True
+        assert sub.call_args.args[0] == ["confirm.sh", "q"]
+    with mock.patch("subprocess.run", return_value=mock.Mock(stdout="Nao\n")):
+        assert o.confirmed("q", False) is False

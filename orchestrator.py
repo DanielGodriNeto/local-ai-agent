@@ -141,7 +141,16 @@ def log(entry: dict) -> None:
 
 
 def confirmed(question: str, yes: bool) -> bool:
-    return yes or (sys.stdin.isatty() and input(f"{question} [s/N] ").strip().lower() in ("s", "y"))
+    """--yes, else the terminal, else AGENT_CONFIRM_CMD (a script that prints s/y for yes), else no."""
+    if yes:
+        return True
+    if sys.stdin.isatty():
+        return input(f"{question} [s/N] ").strip().lower() in ("s", "y")
+    cmd = os.environ.get("AGENT_CONFIRM_CMD")
+    if not cmd:
+        return False
+    res = subprocess.run([cmd, question], capture_output=True, text=True, timeout=120, stdin=subprocess.DEVNULL)
+    return res.stdout.strip().lower() in ("s", "y", "sim", "yes")
 
 
 def handle(text: str, cfg: dict, decide=laya_decide, dry_run=False, yes=False, yes_escalate=False) -> str:
