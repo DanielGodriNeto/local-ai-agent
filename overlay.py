@@ -1,31 +1,61 @@
-"""Borderless text-only overlay, centered near the top of the screen. Thread-safe: call from any thread.
+"""Rounded dark text overlay, centered near the top of the screen. Thread-safe: call from any thread.
 
-Keys: Esc closes (or answers "no" to a question), Enter answers "yes". Demo: python overlay.py
+Keys: Esc closes (or answers "no" to a question), Enter answers "yes". Demo: python overlay.py "texto"
+Windows: rounded via a transparent key colour. Hyprland/X11: Tk cannot round windows, the compositor does
+(decoration rounding), so the card fills the whole window there.
 """
+import ctypes
 import queue
+import sys
 import threading
 import tkinter as tk
+import tkinter.font as tkfont
+from pathlib import Path
 
-BG, BORDER, FG, MUTED = "#0f1115", "#2a2f38", "#f2f4f7", "#8b93a1"
-AMBER, GREEN, RED = "#f5b942", "#7ddc9a", "#ff7a7a"
-FONT = "Segoe UI"  # falls back to the system sans where missing
+BG, FG, HINT = "#07090c", "#e8f1ee", "#5d6b68"
+IDLE, LISTEN, GREEN, RED = "#5d6b68", "#82c341", "#82c341", "#ff6b6b"  # state colours (see make_logo.py)
+KEY = "#010203"  # transparent key colour (Windows)
+FONT_DIR = Path(__file__).parent / "fonts"
+ASSETS = Path(__file__).parent / "assets"
+FONTS = ("Josefin Sans", "JetBrains Mono", "Cascadia Code", "Consolas", "DejaVu Sans Mono", "Courier New")
+RADIUS, PAD, MIN_W, MAX_FRAC = 34, 48, 460, 0.72
+
+
+def load_bundled_fonts() -> None:
+    """Make fonts/*.ttf usable by this process only (no system install). Failure just means a fallback font."""
+    for ttf in FONT_DIR.glob("*.ttf"):
+        try:
+            if sys.platform == "win32":
+                ctypes.windll.gdi32.AddFontResourceExW(str(ttf), 0x10, 0)  # FR_PRIVATE
+            else:
+                ctypes.CDLL("libfontconfig.so.1").FcConfigAppFontAddFile(None, str(ttf).encode())
+        except (OSError, AttributeError):
+            pass
+
+
+def text_size(s: str) -> int:
+    """Big for a word, shrinking as the sentence grows."""
+    return max(22, min(68, int(68 - 0.5 * max(0, len(s) - 8))))
 
 
 class Overlay:
-    def __init__(self, y_frac: float = 0.14):
+    def __init__(self, font: str = "", y_frac: float = 0.05):
+        load_bundled_fonts()
         self.root = r = tk.Tk()
         r.overrideredirect(True)
         r.attributes("-topmost", True)
-        r.attributes("-alpha", 0.95)
-        r.configure(bg=BORDER)
+        self.round = sys.platform == "win32"
+        if self.round:
+            r.attributes("-transparentcolor", KEY)
+        r.configure(bg=KEY if self.round else BG)
+        have = set(tkfont.families(r))
+        self.font = next((f for f in (font, *FONTS) if f and f in have), "TkFixedFont")
         self.y_frac = y_frac
-        self.width = min(900, int(r.winfo_screenwidth() * 0.6))
-        card = tk.Frame(r, bg=BG, padx=36, pady=24)
-        card.pack(fill="both", expand=True, padx=1, pady=1)
-        self._status = tk.Label(card, bg=BG, fg=MUTED, font=(FONT, 10, "bold"), anchor="w")
-        self._status.pack(fill="x")
-        self._text = tk.Label(card, bg=BG, fg=FG, font=(FONT, 24), wraplength=self.width - 74, justify="center")
-        self._text.pack(fill="x", pady=(14, 0))
+        self.width = MIN_W
+        self._logos: dict[str, tk.PhotoImage] = {}
+        self.canvas = tk.Canvas(r, bg=KEY if self.round else BG, highlightthickness=0, bd=0)
+        self.canvas.pack(fill="both", expand=True)
+        self._label, self._color, self._hint = "", IDLE, ""
         self.closed = threading.Event()
         self._jobs: queue.Queue = queue.Queue()
         self._answer = None  # (Event, [bool]) while a question is pending
@@ -33,16 +63,19 @@ class Overlay:
         r.bind("<Escape>", lambda _e: self._reply(False) if self._answer else self._close())
         r.bind("<Button-1>", lambda _e: self._answer or self._close())
         r.after(40, self._pump)
-        self._place()
+        self._draw()
 
     # ---- thread-safe API ----
-    def status(self, label: str, color: str = MUTED) -> None:
-        self._jobs.put(lambda: self._status.config(text=f"●  {label}", fg=color))
+    def status(self, _label: str, color: str = IDLE) -> None:
+        def apply():
+            self._color = color
+            self._draw()
+        self._jobs.put(apply)
 
     def text(self, s: str, color: str = FG) -> None:
         def apply():
-            self._text.config(text=s, fg=color, font=(FONT, 24 if len(s) < 140 else 14))
-            self._place()
+            self._label, self._fg, self._hint = s, color, ""
+            self._draw()
         self._jobs.put(apply)
 
     def ask(self, question: str, timeout: float = 60) -> bool:
@@ -50,9 +83,9 @@ class Overlay:
 
         def show():
             self._answer = (ev, box)
-            self._status.config(text="●  CONFIRMAR", fg=AMBER)
-            self._text.config(text=f"{question}\n\nEnter = sim   ·   Esc = não", fg=FG, font=(FONT, 14))
-            self._place()
+            self._color, self._label, self._fg = LISTEN, question, FG
+            self._hint = "Enter  sim     Esc  não"
+            self._draw()
             self.root.focus_force()
         self._jobs.put(show)
         ev.wait(timeout)
@@ -91,16 +124,47 @@ class Overlay:
         if not self.closed.is_set():
             self.root.after(40, self._pump)
 
-    def _place(self) -> None:
-        r = self.root
-        r.update_idletasks()
-        x = (r.winfo_screenwidth() - self.width) // 2
-        r.geometry(f"{self.width}x{r.winfo_reqheight()}+{x}+{int(r.winfo_screenheight() * self.y_frac)}")
+    def _logo(self, color: str):
+        if color not in self._logos:
+            f = ASSETS / f"logo_{color.lstrip('#')}.png"
+            self._logos[color] = tk.PhotoImage(file=str(f)) if f.exists() else None
+        return self._logos[color]
+
+    def _draw(self) -> None:
+        """Width follows the text (up to MAX_FRAC of the screen); the font shrinks as the sentence grows."""
+        r, c = self.root, self.canvas
+        sw, asking = r.winfo_screenwidth(), bool(self._hint)
+        size = 16 if asking else text_size(self._label)
+        weight = "normal" if asking else "bold"
+        wide = tkfont.Font(family=self.font, size=size, weight=weight).measure(self._label) + 2 * PAD
+        max_w = int(sw * (0.5 if asking else MAX_FRAC))
+        w = self.width = min(max_w, max(MIN_W, wide))
+        c.delete("all")
+        logo = self._logo(self._color)
+        top = 22 + (logo.height() if logo else 8)
+        t = c.create_text(w // 2, top + 18, text=self._label, fill=getattr(self, "_fg", FG), anchor="n",
+                          width=w - 2 * PAD, justify="center", font=(self.font, size, weight))
+        y1 = c.bbox(t)[3] if self._label else top + 18
+        if asking:
+            y1 = c.bbox(c.create_text(w // 2, y1 + 18, text=self._hint, fill=HINT, anchor="n", font=(self.font, 11)))[3]
+        h = y1 + PAD
+        self._rounded(2, 2, w - 2, h - 2, RADIUS if self.round else 0)
+        c.tag_lower("card")
+        if logo:
+            c.create_image(w // 2, 22, image=logo, anchor="n")
+        else:
+            c.create_oval(w // 2 - 4, 22, w // 2 + 4, 30, fill=self._color, outline="")
+        r.geometry(f"{w}x{h}+{(sw - w) // 2}+{int(r.winfo_screenheight() * self.y_frac)}")
+
+    def _rounded(self, x1: int, y1: int, x2: int, y2: int, r: int) -> None:
+        pts = [x1 + r, y1, x2 - r, y1, x2, y1, x2, y1 + r, x2, y2 - r, x2, y2, x2 - r, y2,
+               x1 + r, y2, x1, y2, x1, y2 - r, x1, y1 + r, x1, y1]
+        self.canvas.create_polygon(pts, smooth=True, fill=BG, outline=self._color, width=2, tags="card")
 
 
 if __name__ == "__main__":
     ui = Overlay()
-    ui.status("OUVINDO", AMBER)
-    ui.text("abre o navegador e procura receitas de pão")
-    threading.Thread(target=lambda: ui.hold(5), daemon=True).start()
+    ui.status("", LISTEN)
+    ui.text(" ".join(sys.argv[1:]) or "abre o navegador")
+    threading.Thread(target=lambda: ui.hold(4), daemon=True).start()
     ui.run()

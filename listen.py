@@ -122,23 +122,23 @@ def preload_laya(cfg: dict) -> Callable[[str, dict], dict]:
 def session(ui: overlay.Overlay, cfg: dict, blocks: Optional[Iterator[np.ndarray]] = None) -> None:
     v = cfg["voice"]
     try:
-        ui.status("OUVINDO", overlay.AMBER)
+        ui.status("OUVINDO", overlay.LISTEN)
         stt, decide = LazyWhisper(v["model"], v["language"]), preload_laya(cfg)
         seg = Segmenter(v["silence_s"], v["no_speech_timeout_s"], v["max_s"], v["min_rms"])
         stop = threading.Event()
         threading.Thread(target=lambda: (ui.closed.wait(), stop.set()), daemon=True).start()
         text = listen(blocks or mic_blocks(stop), seg, stt, ui.text, v["partial_every_s"])
         if not text:
-            ui.status("NADA OUVIDO", overlay.MUTED)
-            ui.text("Não ouvi nada.", overlay.MUTED)
+            ui.status("NADA OUVIDO", overlay.IDLE)
+            ui.text("Não ouvi nada.", overlay.IDLE)
             return ui.hold(1.5)
-        ui.status("DECIDINDO", overlay.MUTED)
+        ui.status("DECIDINDO", overlay.IDLE)
         ui.text(text)
 
         def confirm(question: str) -> bool:
             ok = ui.ask(question)
             if ok:
-                ui.status("TRABALHANDO", overlay.MUTED)
+                ui.status("TRABALHANDO", overlay.IDLE)
             return ok
 
         out = o.handle(text, cfg, decide=decide, confirm=confirm)
@@ -154,7 +154,7 @@ def session(ui: overlay.Overlay, cfg: dict, blocks: Optional[Iterator[np.ndarray
 
 def main() -> None:
     cfg = o.load_config()
-    ui = overlay.Overlay()
+    ui = overlay.Overlay(cfg["voice"].get("font", ""))
     threading.Thread(target=session, args=(ui, cfg), daemon=True).start()
     ui.run()
 
