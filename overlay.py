@@ -247,22 +247,18 @@ class Overlay:
         return next((f for f in (self.ui.get("font", ""), *FONTS) if f and f in have), "TkFixedFont")
 
     def _rounded(self, w: int, h: int, r: int) -> None:
-        """Cyberpunk card: dim glow, neon edge, scanlines, accent tabs and a small HUD tag."""
+        """Cyberpunk card: dim glow, neon edge, accent tabs and a small HUD tag."""
         c, bg, neon = self.canvas, self._color("bg"), self._color(self._state)
         x1, y1, x2, y2 = 3, 3, w - 3, h - 3
         pts = [x1 + r, y1, x2 - r, y1, x2, y1, x2, y1 + r, x2, y2 - r, x2, y2, x2 - r, y2,
                x1 + r, y2, x1, y2, x1, y2 - r, x1, y1 + r, x1, y1]
         c.create_polygon(pts, smooth=True, fill=bg, outline=mix(bg, neon, 0.3), width=6, tags="card")
         c.create_polygon(pts, smooth=True, fill="", outline=neon, width=2, tags="card")
-        line = mix(bg, neon, 0.07)
-        for y in range(r + 2, h - r - 2, 4):
-            c.create_line(10, y, w - 10, y, fill=line, tags="scan")
         c.create_line(x1 + r, y1, x1 + r + 46, y1, fill=neon, width=5, tags="card")
         c.create_line(x2 - r - 46, y2, x2 - r, y2, fill=neon, width=5, tags="card")
         if self._tag:
             c.create_text(x1 + r + 8, y1 + 12, text=self._tag.upper(), fill=neon, anchor="w",
                           font=("Consolas", 9, "bold"), tags="card")
-        c.tag_lower("scan")
         c.tag_lower("card")
 
 
