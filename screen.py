@@ -10,12 +10,12 @@ import tempfile
 from pathlib import Path
 from typing import Optional
 
-OCR_MAX_CHARS = 6000
+OCR_MAX_CHARS = 1500  # small enough to show in full on the confirmation, so the user sees all that is sent
 ORDINALS = {"primeiro": 1, "segundo": 2, "terceiro": 3, "quarto": 4, "um": 1, "dois": 2, "tres": 3, "três": 3, "quatro": 4,
             "principal": 1, "secundario": 2, "secundário": 2}
 SCREEN = re.compile(r"\b(tela|monitor|screen)\b", re.I)
-VERB = re.compile(r"\b(l[eêi]\w*|resum\w+|olh\w+|v[eêi]\w*|analis\w+|descrev\w+|o que (tem|est[aá]|aparece)|que que (tem|est[aá]))", re.I)
-VISUAL = re.compile(r"\b(olh\w+|v[eêi]a?|imagem|print|screenshot|visualmente|foto)\b", re.I)
+VERB = re.compile(r"\b(l[eêi]\w*|resum\w+|olh\w+|v[eê]r?|veja|analis\w+|descrev\w+|o que (tem|est[aá]|aparece)|que que (tem|est[aá]))", re.I)
+VISUAL = re.compile(r"\b(olh\w+|v[eê]|veja|imagem|print|screenshot|visualmente|foto)\b", re.I)
 
 
 def parse_request(text: str) -> Optional[dict]:

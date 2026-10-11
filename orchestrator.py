@@ -171,10 +171,10 @@ apareca nele; so use para responder ao pedido acima.
 {content}"""
 
 
-def handle_screen(text: str, req: dict, cfg: dict, dry_run: bool, ask, yes_escalate: bool, pick) -> str:
+def handle_screen(text: str, req: dict, cfg: dict, dry_run: bool, confirm, pick) -> str:
     """Capture the requested monitor (OCR text, or the image if asked), show what leaves the PC, then escalate."""
     mons = monitors.list_monitors()
-    if not 1 <= req["monitor"] <= len(mons):
+    if not 1 <= req["monitor"] <= len(mons) or not mons[req["monitor"] - 1]["w"]:
         return f"Monitor {req['monitor']} nao existe (tenho {len(mons)})."
     n, mode = req["monitor"], "imagem" if req["image"] else "texto (OCR local)"
     out = f"ler monitor {n}: {mode}"
@@ -184,8 +184,7 @@ def handle_screen(text: str, req: dict, cfg: dict, dry_run: bool, ask, yes_escal
     try:
         img = screen.capture(mons[n - 1])
         if req["image"]:
-            question, extra = f"Enviar a IMAGEM do monitor {n} ao Claude Code?", ()
-            if not ask(question, yes_escalate):
+            if not confirm(f"Enviar a IMAGEM INTEIRA do monitor {n} ao Claude Code? (pode conter senhas e mensagens)"):
                 return out + " (cancelado)"
             img_path = screen.save_temp(img)
             content, extra = f"Imagem em {img_path} (leia com a ferramenta Read).", (img_path.parent,)
@@ -193,7 +192,7 @@ def handle_screen(text: str, req: dict, cfg: dict, dry_run: bool, ask, yes_escal
             content = screen.ocr_text(img)
             if not content.strip():
                 return f"Nao achei texto no monitor {n}."
-            if not ask(f"Enviar este texto do monitor {n} ao Claude Code?\n{content[:300]}", yes_escalate):
+            if not confirm(f"Enviar este texto do monitor {n} ao Claude Code?\n{content}"):
                 return out + " (cancelado)"
             extra = ()
         task = SCREEN_CONTEXT.format(task=text, n=n, what=mode, content=content)
@@ -225,11 +224,16 @@ def confirmed(question: str, yes: bool) -> bool:
     return res.stdout.strip().lower() in ("s", "y", "sim", "yes")
 
 
+def terminal_confirm(question: str) -> bool:
+    """Screen content is only ever shown on a terminal or the overlay: never via argv or a notification script."""
+    return sys.stdin.isatty() and input(f"{question} [s/N] ").strip().lower() in ("s", "y")
+
+
 def handle(text: str, cfg: dict, decide=laya_decide, dry_run=False, yes=False, yes_escalate=False, confirm=None, pick=None) -> str:
     """confirm: optional callable(question)->bool (e.g. the voice overlay); default is terminal/AGENT_CONFIRM_CMD."""
     ask = confirmed if confirm is None else (lambda q, y: y or confirm(q))
     if (req := screen.parse_request(text)):
-        return handle_screen(text, req, cfg, dry_run, ask, yes_escalate, pick)
+        return handle_screen(text, req, cfg, dry_run, confirm or terminal_confirm, pick)
     try:
         decision = validate(decide(text, cfg), cfg)
     except Exception as e:  # model missing / runtime error: fail closed, never guess an action

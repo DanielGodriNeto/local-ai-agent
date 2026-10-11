@@ -173,7 +173,7 @@ def test_screen_request_confirms_then_sends_untrusted_text_on_stdin():
          mock.patch("shutil.which", return_value="claude"), mock.patch("subprocess.run", return_value=fake) as sub:
         assert "cancelado" in o.handle("o que tem na tela", CFG, confirm=lambda q: "SEGREDO" in q and False)
         sub.assert_not_called()  # nothing leaves the PC without a yes
-        assert o.handle("o que tem na tela", CFG, yes_escalate=True) == "resumo"
+        assert o.handle("o que tem na tela", CFG, yes_escalate=True, confirm=lambda q: True) == "resumo"  # --yes-escalate never skips it
         assert "SEGREDO" in sub.call_args.kwargs["input"] and "SEGREDO" not in " ".join(sub.call_args.args[0])
 
 
@@ -183,4 +183,4 @@ def test_screen_parse_and_missing_monitor():
     assert screen.parse_request("olha o segundo monitor")["image"] is True
     assert screen.parse_request("abre o navegador") is None
     with mock.patch("monitors.list_monitors", return_value=[{"n": 1}]):
-        assert "nao existe" in o.handle("le o monitor 3", CFG, yes_escalate=True)
+        assert "nao existe" in o.handle("le o monitor 3", CFG, confirm=lambda q: True)
