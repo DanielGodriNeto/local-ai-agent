@@ -1,6 +1,7 @@
-"""Windows global hotkey: Win+Alt+V starts a voice session (python hotkey_windows.py, or put it in shell:startup).
+"""Windows global hotkey that starts a voice session (python hotkey_windows.py, or put it in shell:startup).
 
-Win+V itself cannot be registered: Windows reserves it for clipboard history.
+Win+V is tried first, but Windows reserves it for clipboard history unless you disable it (see README);
+otherwise Win+Alt+V is used.
 """
 import ctypes
 import ctypes.wintypes as wt
@@ -14,9 +15,12 @@ LISTEN = Path(__file__).parent / "listen.py"
 
 def main() -> None:
     user32 = ctypes.windll.user32
-    if not user32.RegisterHotKey(None, 1, MOD_WIN | MOD_ALT | MOD_NOREPEAT, VK_V):
-        sys.exit("Win+Alt+V is already taken by another program.")
-    print("Win+Alt+V ready. Ctrl+C to quit.")
+    for name, mods in (("Win+V", MOD_WIN), ("Win+Alt+V", MOD_WIN | MOD_ALT)):
+        if user32.RegisterHotKey(None, 1, mods | MOD_NOREPEAT, VK_V):
+            break
+    else:
+        sys.exit("Win+V and Win+Alt+V are both taken by other programs.")
+    print(f"{name} ready. Ctrl+C to quit.")
     session, msg = None, wt.MSG()
     while user32.GetMessageW(ctypes.byref(msg), None, 0, 0) > 0:
         if msg.message == WM_HOTKEY and (session is None or session.poll() is not None):
