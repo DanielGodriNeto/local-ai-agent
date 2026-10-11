@@ -1,0 +1,6 @@
+onnxruntime
+tokenizers
+numpy
+faster-whisper
+sounddevice
+pytest

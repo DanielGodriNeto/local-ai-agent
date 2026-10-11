@@ -170,7 +170,9 @@ def confirmed(question: str, yes: bool) -> bool:
     return res.stdout.strip().lower() in ("s", "y", "sim", "yes")
 
 
-def handle(text: str, cfg: dict, decide=laya_decide, dry_run=False, yes=False, yes_escalate=False) -> str:
+def handle(text: str, cfg: dict, decide=laya_decide, dry_run=False, yes=False, yes_escalate=False, confirm=None) -> str:
+    """confirm: optional callable(question)->bool (e.g. the voice overlay); default is terminal/AGENT_CONFIRM_CMD."""
+    ask = confirmed if confirm is None else (lambda q, y: y or confirm(q))
     try:
         decision = validate(decide(text, cfg), cfg)
     except Exception as e:  # model missing / runtime error: fail closed, never guess an action
@@ -184,7 +186,7 @@ def handle(text: str, cfg: dict, decide=laya_decide, dry_run=False, yes=False, y
         out = f"preset: {name}" + (f" ({game['name']})" if game else "")
         if dry_run:
             out += " (dry-run)"
-        elif preset["confirm"] and not confirmed(f"Executar '{name}'?", yes):
+        elif preset["confirm"] and not ask(f"Executar '{name}'?", yes):
             out += " (cancelado)"
         else:
             os_adapter.launch(preset)
@@ -195,7 +197,7 @@ def handle(text: str, cfg: dict, decide=laya_decide, dry_run=False, yes=False, y
                     f"  ferramentas: {esc['allowed_tools']}  modo: {esc['permission_mode']}  pasta: {esc['workdir']}")
         if dry_run:
             out += " (dry-run)"
-        elif confirmed(question, yes_escalate):
+        elif ask(question, yes_escalate):
             out = escalate(decision["task"], cfg)
         else:
             out += " (cancelado)"
