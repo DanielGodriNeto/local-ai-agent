@@ -40,7 +40,7 @@ def describe(ev: dict) -> tuple[str, str] | None:
         first = re.split(r"\s+", str(inp.get("command", "")).strip())[0] if inp.get("command") else ""
         # an env assignment (FOO=secret cmd) must never reach the screen
         return "accent", "Rodando " + (os.path.basename(first) if first and "=" not in first else "um comando")
-    target = inp.get("file_path") or inp.get("notebook_path") or inp.get("path") or inp.get("pattern") or ""
+    target = inp.get("file_path") or inp.get("notebook_path") or inp.get("path") or ""
     verb = TOOL_VERBS.get(tool, clean(tool, 24) or "Trabalhando")
     return "accent", clean(f"{verb} {os.path.basename(str(target))}" if target else verb)
 
@@ -99,9 +99,11 @@ def show() -> None:
             with conn:
                 conn.settimeout(1)
                 try:
-                    ev = json.loads(conn.makefile().readline())
+                    ev = json.loads(conn.makefile().readline(512))
                 except (OSError, ValueError):
                     continue
+            if not isinstance(ev, dict) or not isinstance(ev.get("state", "idle"), str):
+                continue
             state, text = ev.get("state", "idle"), clean(ev.get("text", ""))
             ui.status("", states.get(state, overlay.IDLE))
             ui.text(text)

@@ -24,6 +24,8 @@ def libraries() -> list[Path]:
 
 
 def launch_for(appid: str) -> dict:
+    if not appid.isdigit():  # appid comes from a file; never let it reach cmd.exe unchecked
+        raise ValueError("invalid appid")
     uri = f"steam://rungameid/{appid}"
     return {"linux": ["xdg-open", uri], "windows": ["cmd", "/c", "start", "", uri]}
 
@@ -34,7 +36,7 @@ def scan() -> list[dict]:
         for acf in lib.glob("appmanifest_*.acf"):
             text = acf.read_text(encoding="utf-8", errors="ignore")
             appid, name = (re.search(rf'"{k}"\s+"([^"]*)"', text) for k in ("appid", "name"))
-            if appid and name and not SKIP.search(name.group(1)):
+            if appid and appid.group(1).isdigit() and name and not SKIP.search(name.group(1)):
                 games[appid.group(1)] = {"name": name.group(1), "appid": appid.group(1), **launch_for(appid.group(1))}
     return sorted(games.values(), key=lambda g: g["name"].lower())
 
