@@ -13,6 +13,7 @@ import sys
 import time
 from pathlib import Path
 
+import game_indexer
 import laya
 import os_adapter
 
@@ -48,6 +49,9 @@ def shortlist(text: str, presets: dict, k: int) -> list[str]:
 
 def laya_decide(text: str, cfg: dict, scorer=None) -> dict:
     lc = cfg["laya"]
+    game_preset = next((n for n, v in cfg["presets"].items() if v.get("kind") == "game"), None)
+    if game_preset and (named := resolve_game(text, game_preset, cfg)).get("game", {}).get("exact"):
+        return named  # the request names an installed game outright: no need to ask the model
     names = shortlist(text, cfg["presets"], lc["max_options"] - 1)
     options = [f'{n}: {cfg["presets"][n]["description"]}' for n in names] + [ESCALATE_OPTION]
     scorer = scorer or laya.LayaScorer(HERE / lc["model_dir"], lc["threads"])
@@ -55,7 +59,20 @@ def laya_decide(text: str, cfg: dict, scorer=None) -> dict:
                        max_rounds=lc["max_rounds"], min_conf=lc["min_conf"])
     if pick is None or pick == len(names):  # no confident preset match: Claude handles it (user confirms)
         return {"action": "escalate", "task": text}
-    return {"action": "run_preset", "preset": names[pick]}
+    return resolve_game(text, names[pick], cfg)
+
+
+def resolve_game(text: str, name: str, cfg: dict) -> dict:
+    """A kind=game preset needs the game named in the request; no match asks which one."""
+    decision = {"action": "run_preset", "preset": name}
+    if cfg["presets"][name].get("kind") != "game":
+        return decision
+    games_file = HERE / "games.json"
+    games = json.loads(games_file.read_text(encoding="utf-8")) if games_file.exists() else []
+    game = game_indexer.find_game(text, games)
+    if not game:
+        return {"action": "clarify", "reply": "Qual jogo? (rode game_indexer.py se a lista estiver vazia)"}
+    return {**decision, "game": game}
 
 
 def validate(decision: dict, cfg: dict) -> dict:
@@ -162,8 +179,9 @@ def handle(text: str, cfg: dict, decide=laya_decide, dry_run=False, yes=False, y
 
     if action == "run_preset":
         name = decision["preset"]
-        preset = cfg["presets"][name]
-        out = f"preset: {name}"
+        game = decision.get("game")
+        preset = {**cfg["presets"][name], **(game or {})}
+        out = f"preset: {name}" + (f" ({game['name']})" if game else "")
         if dry_run:
             out += " (dry-run)"
         elif preset["confirm"] and not confirmed(f"Executar '{name}'?", yes):

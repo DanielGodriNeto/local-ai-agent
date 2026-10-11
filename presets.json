@@ -19,7 +19,7 @@
   },
   "presets": {
     "open_browser": {
-      "description": "open the web browser (abre o navegador, internet)",
+      "description": "open the web browser to surf the internet (navegador, internet, site)",
       "confirm": false,
       "linux": [
         "xdg-open",
@@ -34,7 +34,7 @@
       ]
     },
     "open_terminal": {
-      "description": "open a terminal (abre o terminal, console)",
+      "description": "open a command-line terminal (terminal, console, shell)",
       "confirm": false,
       "linux": [
         "alacritty"
@@ -57,6 +57,11 @@
         "rundll32.exe",
         "user32.dll,LockWorkStation"
       ]
+    },
+    "play_game": {
+      "description": "play or launch a video game (jogar, joga, jogo)",
+      "confirm": false,
+      "kind": "game"
     }
   }
 }

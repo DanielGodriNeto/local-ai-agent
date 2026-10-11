@@ -126,3 +126,19 @@ def test_confirm_cmd_used_without_tty(monkeypatch):
         assert sub.call_args.args[0] == ["confirm.sh", "q"]
     with mock.patch("subprocess.run", return_value=mock.Mock(stdout="Nao\n")):
         assert o.confirmed("q", False) is False
+
+
+def test_find_game_matches_by_words_and_rejects_unknown():
+    import game_indexer as g
+    games = [{"name": "Elden Ring"}, {"name": "Counter-Strike 2"}]
+    assert g.find_game("joga elden ring pra mim", games)["name"] == "Elden Ring"
+    assert g.find_game("abre counter strike", games)["name"] == "Counter-Strike 2"
+    assert g.find_game("abre o navegador", games) is None
+
+
+def test_game_preset_launches_the_game_not_the_preset():
+    game = {"name": "Elden Ring", "linux": ["xdg-open", "steam://rungameid/1"], "windows": ["x"]}
+    with mock.patch("os_adapter.launch") as launch:
+        out = run({"action": "run_preset", "preset": "play_game", "game": game})
+        assert "Elden Ring" in out
+        assert launch.call_args.args[0]["linux"] == game["linux"]
