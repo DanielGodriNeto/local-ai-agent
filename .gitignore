@@ -1,3 +1,4 @@
 agent.log.jsonl
 __pycache__/
 .pytest_cache/
+models/

@@ -1,106 +1,155 @@
-"""Decision model (Ollama) routes text to: run_preset | answer | escalate (Claude Code) | clarify.
+"""Laya picks: run a preset | escalate to Claude Code | ask. Claude may propose new presets; the user approves.
 
-Usage: python orchestrator.py "abre o navegador" [--dry-run] [--yes]
+Usage: python orchestrator.py "abre o navegador" [--dry-run] [--yes] [--yes-escalate]
+       python orchestrator.py --approve        # review presets proposed by Claude
 """
 import argparse
 import json
+import os
+import re
 import shutil
 import subprocess
 import sys
 import time
-import urllib.request
 from pathlib import Path
 
+import laya
 import os_adapter
 
 HERE = Path(__file__).parent
-ACTIONS = ["run_preset", "answer", "escalate", "clarify"]
+PENDING = HERE / "presets.pending.json"
+ESCALATE_OPTION = "claude: code, bugs, files, questions or any complex task (codigo, erro, arquivos, pergunta, tarefa complexa)"
+PERMISSION_MODES = {"default", "plan", "acceptEdits"}
+SHELLS = {"sh", "bash", "zsh", "fish", "cmd", "powershell", "pwsh", "eval", "env", "sudo", "doas"}
+NAME_RE = re.compile(r"^[a-z][a-z0-9_]{2,30}$")
+PROPOSAL_RE = re.compile(r"```preset\s*(\{.*?\})\s*```", re.S)
+WRAPPER = """{task}
 
-SYSTEM = """Voce e o roteador de decisao de um assistente local. Responda SO com JSON.
-Escolha UMA acao:
-- run_preset: o pedido corresponde exatamente a um preset da lista. Preencha "preset" com a chave.
-- answer: pergunta simples que voce responde sozinho, sem tocar no computador. Preencha "reply".
-- escalate: exige ler/editar arquivos, codigo, debugar ou raciocinio longo. Preencha "task" com o pedido completo e autocontido para o Claude Code.
-- clarify: pedido ambiguo ou sem preset correspondente. Preencha "reply" com UMA pergunta curta.
-Nunca invente presets. Nunca gere comandos de shell.
-Presets disponiveis:
-"""
-
-SCHEMA = {
-    "type": "object",
-    "properties": {
-        "action": {"type": "string", "enum": ACTIONS},
-        "preset": {"type": "string"},
-        "reply": {"type": "string"},
-        "task": {"type": "string"},
-    },
-    "required": ["action"],
-}
+---
+Se esta tarefa for simples, repetivel, sem argumentos variaveis e puder virar um atalho local,
+termine a resposta com UM bloco ```preset {{"name": "snake_case", "description": "frase curta",
+"linux": ["comando", "arg"], "windows": ["comando", "arg"]}}```. Uma lista de argumentos, sem shell.
+Caso contrario, nao inclua o bloco."""
 
 
 def load_config(path: Path = HERE / "presets.json") -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def ollama_decide(text: str, cfg: dict) -> dict:
-    listing = "\n".join(f"- {k}: {v['description']}" for k, v in cfg["presets"].items())
-    body = json.dumps({
-        "model": cfg["decider"]["model"],
-        "stream": False,
-        "format": SCHEMA,
-        "options": {"temperature": 0},
-        "messages": [
-            {"role": "system", "content": SYSTEM + listing},
-            {"role": "user", "content": text},
-        ],
-    }).encode()
-    req = urllib.request.Request(cfg["decider"]["url"], body, {"Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=cfg["decider"]["timeout_s"]) as r:
-        return json.loads(json.loads(r.read())["message"]["content"])
+def words(s: str) -> set[str]:
+    return set(re.findall(r"\w{3,}", s.lower()))
+
+
+def shortlist(text: str, presets: dict, k: int) -> list[str]:
+    """Laya's window fits ~8 options; keep the presets sharing the most words with the request."""
+    rank = sorted(presets, key=lambda n: -len(words(text) & words(n.replace("_", " ") + " " + presets[n]["description"])))
+    return rank[:k]
+
+
+def laya_decide(text: str, cfg: dict, scorer=None) -> dict:
+    lc = cfg["laya"]
+    names = shortlist(text, cfg["presets"], lc["max_options"] - 1)
+    options = [f'{n}: {cfg["presets"][n]["description"]}' for n in names] + [ESCALATE_OPTION]
+    scorer = scorer or laya.LayaScorer(HERE / lc["model_dir"], lc["threads"])
+    pick = laya.choose(lambda opts: scorer(text, opts), options, min_rounds=lc["min_rounds"],
+                       max_rounds=lc["max_rounds"], min_conf=lc["min_conf"])
+    if pick is None or pick == len(names):  # no confident preset match: Claude handles it (user confirms)
+        return {"action": "escalate", "task": text}
+    return {"action": "run_preset", "preset": names[pick]}
 
 
 def validate(decision: dict, cfg: dict) -> dict:
-    """Never trust model output: unknown action or preset degrades to clarify."""
-    action = decision.get("action")
-    if action not in ACTIONS:
-        return {"action": "clarify", "reply": "Nao entendi, pode repetir?"}
-    if action == "run_preset" and decision.get("preset") not in cfg["presets"]:
-        return {"action": "clarify", "reply": "Nao tenho esse comando. O que voce quer fazer?"}
-    if action == "escalate" and not decision.get("task", "").strip():
-        return {"action": "clarify", "reply": "O que exatamente devo pedir ao Claude Code?"}
-    return decision
+    """Never trust the decider: unknown action/preset degrades to clarify."""
+    if decision.get("action") == "run_preset" and decision.get("preset") in cfg["presets"]:
+        return decision
+    if decision.get("action") == "escalate" and decision.get("task", "").strip():
+        return decision
+    if decision.get("action") == "clarify":
+        return decision
+    return {"action": "clarify", "reply": "Nao entendi, pode repetir?"}
+
+
+def valid_proposal(p: dict, cfg: dict) -> bool:
+    if not (isinstance(p.get("name"), str) and NAME_RE.match(p["name"]) and p["name"] not in cfg["presets"]):
+        return False
+    if not (isinstance(p.get("description"), str) and 0 < len(p["description"]) <= 120):
+        return False
+    cmds = [p[k] for k in ("linux", "windows") if k in p]
+    return bool(cmds) and all(
+        isinstance(c, list) and c and all(isinstance(a, str) and a for a in c)
+        and Path(c[0]).stem.lower() not in SHELLS for c in cmds)
+
+
+def save_proposals(output: str, cfg: dict) -> str:
+    """Strip ```preset blocks from Claude's answer; queue valid ones for user approval."""
+    pending = json.loads(PENDING.read_text(encoding="utf-8")) if PENDING.exists() else []
+    for raw in PROPOSAL_RE.findall(output):
+        try:
+            p = json.loads(raw)
+        except ValueError:
+            continue
+        if isinstance(p, dict) and valid_proposal(p, cfg) and all(p["name"] != q["name"] for q in pending):
+            pending.append(p)
+    PENDING.write_text(json.dumps(pending, ensure_ascii=False, indent=2), encoding="utf-8")
+    return PROPOSAL_RE.sub("", output).strip()
+
+
+def approve(cfg_path: Path = HERE / "presets.json", ask=input) -> int:
+    """Interactive: show each proposed command verbatim; merge the ones the user accepts."""
+    cfg = load_config(cfg_path)
+    pending = json.loads(PENDING.read_text(encoding="utf-8")) if PENDING.exists() else []
+    added = 0
+    for p in pending:
+        if not valid_proposal(p, cfg):
+            continue
+        print(f"\n{p['name']}: {p['description']}")
+        for k in ("linux", "windows"):
+            if k in p:
+                print(f"  {k}: {p[k]}")
+        if ask("Aprovar? [s/N] ").strip().lower() not in ("s", "y"):
+            continue
+        auto = ask("Rodar sem confirmar nas proximas vezes? [s/N] ").strip().lower() in ("s", "y")
+        cfg["presets"][p["name"]] = {"description": p["description"], "confirm": not auto,
+                                     **{k: p[k] for k in ("linux", "windows") if k in p}}
+        added += 1
+    cfg_path.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
+    PENDING.unlink(missing_ok=True)
+    return added
 
 
 def escalate(task: str, cfg: dict) -> str:
-    """Hand the task to Claude Code headless; read-only tools unless presets.json widens them."""
+    """Hand the task to Claude Code headless. Task goes via stdin so it can never be read as a flag."""
     esc = cfg["escalation"]
     claude = shutil.which("claude")
     if not claude:
         return "claude CLI nao encontrado no PATH"
-    argv = [claude, "-p", task, "--permission-mode", esc["permission_mode"],
-            "--allowedTools", *esc["allowed_tools"]]
-    res = subprocess.run(argv, cwd=Path(esc["workdir"]).expanduser(), capture_output=True,
-                         text=True, timeout=esc["timeout_s"], stdin=subprocess.DEVNULL)
-    return (res.stdout or res.stderr).strip()
+    if esc["permission_mode"] not in PERMISSION_MODES:
+        return f"permission_mode invalido: {esc['permission_mode']}"
+    argv = [claude, "-p", "--permission-mode", esc["permission_mode"], "--allowedTools", *esc["allowed_tools"]]
+    workdir = (HERE / Path(esc["workdir"]).expanduser()).resolve()
+    res = subprocess.run(argv, input=WRAPPER.format(task=task), cwd=workdir, capture_output=True,
+                         text=True, timeout=esc["timeout_s"])
+    return save_proposals((res.stdout or res.stderr).strip(), cfg)
 
 
 def log(entry: dict) -> None:
+    """Metadata only: no free text, no model output."""
     entry["ts"] = time.strftime("%Y-%m-%dT%H:%M:%S")
-    with open(HERE / "agent.log.jsonl", "a", encoding="utf-8") as f:
-        f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    fd = os.open(HERE / "agent.log.jsonl", os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+    with os.fdopen(fd, "a", encoding="utf-8") as f:
+        f.write(json.dumps(entry) + "\n")
 
 
 def confirmed(question: str, yes: bool) -> bool:
     return yes or (sys.stdin.isatty() and input(f"{question} [s/N] ").strip().lower() in ("s", "y"))
 
 
-def handle(text: str, cfg: dict, decide=ollama_decide, dry_run=False, yes=False) -> str:
+def handle(text: str, cfg: dict, decide=laya_decide, dry_run=False, yes=False, yes_escalate=False) -> str:
     try:
         decision = validate(decide(text, cfg), cfg)
-    except Exception as e:  # Ollama down / bad JSON: fail closed, never guess an action
-        decision = {"action": "clarify", "reply": f"Modelo de decisao indisponivel ({type(e).__name__})."}
-    action = decision["action"]
-    out = decision.get("reply", "")
+    except Exception as e:  # model missing / runtime error: fail closed, never guess an action
+        decision = {"action": "clarify", "reply": f"Decisor indisponivel ({type(e).__name__})."}
+    action, out = decision["action"], decision.get("reply", "")
 
     if action == "run_preset":
         name = decision["preset"]
@@ -113,23 +162,32 @@ def handle(text: str, cfg: dict, decide=ollama_decide, dry_run=False, yes=False)
         else:
             os_adapter.launch(preset)
     elif action == "escalate":
-        task = decision["task"]
-        out = f"escalar p/ Claude Code: {task}"
+        esc = cfg["escalation"]
+        out = f"escalar p/ Claude Code: {decision['task']}"
+        question = (f"Enviar ao Claude Code?\n  tarefa: {decision['task'][:300]}\n"
+                    f"  ferramentas: {esc['allowed_tools']}  modo: {esc['permission_mode']}  pasta: {esc['workdir']}")
         if dry_run:
             out += " (dry-run)"
-        elif confirmed("Enviar ao Claude Code?", yes):
-            out = escalate(task, cfg)
+        elif confirmed(question, yes_escalate):
+            out = escalate(decision["task"], cfg)
         else:
             out += " (cancelado)"
-    log({"input": text, "decision": decision, "dry_run": dry_run, "output": out[:500]})
+    log({"action": action, "preset": decision.get("preset"), "input_len": len(text), "dry_run": dry_run})
     return out
 
 
 if __name__ == "__main__":
-    ap = argparse.ArgumentParser()
-    ap.add_argument("text")
-    ap.add_argument("--dry-run", action="store_true")
-    ap.add_argument("--yes", action="store_true", help="skip confirmations")
-    a = ap.parse_args()
     sys.stdout.reconfigure(encoding="utf-8")
-    print(handle(a.text, load_config(), dry_run=a.dry_run, yes=a.yes))
+    ap = argparse.ArgumentParser()
+    ap.add_argument("text", nargs="?")
+    ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--yes", action="store_true", help="skip preset confirmations")
+    ap.add_argument("--yes-escalate", action="store_true", help="skip the Claude Code confirmation")
+    ap.add_argument("--approve", action="store_true", help="review presets proposed by Claude")
+    a = ap.parse_args()
+    if a.approve:
+        print(f"{approve()} preset(s) adicionados")
+    elif a.text:
+        print(handle(a.text, load_config(), dry_run=a.dry_run, yes=a.yes, yes_escalate=a.yes_escalate))
+    else:
+        ap.error("informe o texto ou --approve")
