@@ -161,5 +161,6 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    sys.stdout.reconfigure(encoding="utf-8")
+    if sys.stdout:  # pythonw (started by the hotkey) has no console
+        sys.stdout.reconfigure(encoding="utf-8")
     main()
