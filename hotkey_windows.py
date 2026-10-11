@@ -1,7 +1,6 @@
-"""Windows global hotkey that starts a voice session (python hotkey_windows.py, or put it in shell:startup).
+"""Windows global hotkey: Win+F12 starts a voice session (python hotkey_windows.py, or put it in shell:startup).
 
-Win+V is tried first, but Windows reserves it for clipboard history unless you disable it (see README);
-otherwise Win+F12 is used.
+A two-key combo so it can be bound to a mouse button. Win+V is reserved by Windows (clipboard history).
 """
 import ctypes
 import ctypes.wintypes as wt
@@ -15,12 +14,9 @@ LISTEN = Path(__file__).parent / "listen.py"
 
 def main() -> None:
     user32 = ctypes.windll.user32
-    for name, mods in (("Win+V", MOD_WIN), ("Win+F12", MOD_WIN | MOD_ALT)):
-        if user32.RegisterHotKey(None, 1, mods | MOD_NOREPEAT, VK_V):
-            break
-    else:
-        sys.exit("Win+V and Win+F12 are both taken by other programs.")
-    print(f"{name} ready. Ctrl+C to quit.")
+    if not user32.RegisterHotKey(None, 1, MOD_WIN | MOD_NOREPEAT, VK_F12):
+        sys.exit("Win+F12 is already taken by another program.")
+    print("Win+F12 ready. Ctrl+C to quit.")
     session, msg = None, wt.MSG()
     while user32.GetMessageW(ctypes.byref(msg), None, 0, 0) > 0:
         if msg.message == WM_HOTKEY and (session is None or session.poll() is not None):
