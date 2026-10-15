@@ -298,19 +298,45 @@ def run_ollama(cfg: dict, prompt: str, conv: Conversation, on_event, cancel) -> 
     return answer
 
 
-def first_ollama_model(base: str) -> Optional[str]:
+def ollama_models(base: str) -> list[str]:
     url = loopback(base)
     if not url:
-        return None
+        return []
     conn = http.client.HTTPConnection(url.hostname, url.port or 80, timeout=2)
     try:
         conn.request("GET", url.path.rstrip("/") + "/api/tags")
-        models = json.load(conn.getresponse()).get("models", [])
-    except (OSError, http.client.HTTPException, ValueError):
-        return None
+        return [m["name"] for m in json.load(conn.getresponse()).get("models", [])]
+    except (OSError, http.client.HTTPException, ValueError, KeyError, TypeError):
+        return []
     finally:
         conn.close()
-    return models[0]["name"] if models else None
+
+
+def first_ollama_model(base: str) -> Optional[str]:
+    models = ollama_models(base)
+    return models[0] if models else None
+
+
+def ollama_image(cfg: dict, model: str, prompt: str, png: bytes, cancel: threading.Event) -> str:
+    """One question about one image to a local vision model: the image never leaves the PC. "" on any failure."""
+    import base64
+    timeout, url = cfg["brain"]["timeout_s"], loopback(cfg["brain"]["ollama"]["url"])
+    if not url:
+        return ""
+    body = json.dumps({"model": model, "stream": False, "think": False, "options": {"temperature": 0},
+                       "messages": [{"role": "user", "content": prompt,
+                                     "images": [base64.b64encode(png).decode("ascii")]}]})
+    conn = http.client.HTTPConnection(url.hostname, url.port or 80, timeout=timeout)
+    done = watch(cancel, time.time() + timeout, lambda: abort(conn.sock))
+    try:
+        conn.request("POST", url.path.rstrip("/") + "/api/chat", body, {"Content-Type": "application/json"})
+        reply = json.load(conn.getresponse())
+        return str(reply.get("message", {}).get("content", "")) if isinstance(reply, dict) else ""
+    except (OSError, http.client.HTTPException, ValueError):
+        return ""
+    finally:
+        done.set()
+        conn.close()
 
 
 # ---- entry point ---------------------------------------------------------------------------------------------------

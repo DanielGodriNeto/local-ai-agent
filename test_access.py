@@ -100,11 +100,12 @@ class FakeDesk:
         self.shown.append(("close",))
 
 
-def run(cmd, desk, answers=(), yes=True, choice=0, brain="claude", reply='{"x": 640, "y": 400}'):
+def run(cmd, desk, answers=(), yes=True, choice=0, brain="claude", reply='{"x": 640, "y": 400}', local=None):
     asked, heard = [], list(answers)
     out = access.run(cmd, {"brain": {"use": brain}}, desk, hear=lambda p: heard.pop(0) if heard else None,
                      confirm=lambda q: asked.append(q) or yes, pick=lambda q, opts: asked.append(opts) or choice,
-                     cancel=threading.Event(), ask_ai=lambda prompt, d: asked.append(prompt) or reply)
+                     cancel=threading.Event(), ask_ai=lambda prompt, d: asked.append(prompt) or reply,
+                     ask_local=local and (lambda prompt, png: asked.append(("local", png[:4])) or local))
     return out, asked
 
 
@@ -192,3 +193,16 @@ def test_grid_stops_on_cancel_silence_or_too_many_rounds():
         desk = FakeDesk()
         run({"do": "grid"}, desk, answers=answers)
         assert desk.clicks == [] and desk.shown[-1] == ("close",)
+
+
+def test_a_local_vision_model_needs_no_consent_and_answers_in_thousandths():
+    desk = FakeDesk()
+    out, asked = run({"do": "click", "name": "enviar", "button": "left"}, desk, brain="codex", local='{"x": 500, "y": 250}')
+    assert asked[0] == ("local", b"\x89PNG")  # the image went to the local model only, without a question
+    assert desk.clicks == [((1280, 400), "left")]  # half and a quarter of the 2560x1600 window
+    assert "Clicar aqui" in asked[1]  # the click itself still asks
+
+
+def test_thousandths_are_clamped_inside_the_image():
+    assert access.from_thousandths((1000, 1000), 640, 400) == (639, 399)
+    assert access.from_thousandths(None, 640, 400) is None

@@ -65,8 +65,10 @@ passed to the AI as untrusted data (read-only tools, image saved only to a priva
 
 - "clica em Salvar", "clique duplo em Documentos", "clique com o botão direito em Lixeira": finds the control by its
   name in the window you are using (UI Automation) and clicks it. Several matches: it asks which one.
-- Nothing matches: it offers to send an image of **that window only** to Claude Code, shows a ring where the
-  AI points and asks "Clicar aqui?" before clicking. With Codex or Ollama it suggests the grid instead.
+- Nothing matches: with `ollama pull qwen3-vl:4b-instruct` installed, a local vision model finds it and the image
+  never leaves the PC (~4 s on a mid GPU). Otherwise it offers to send an image of **that window only** to Claude
+  Code. Either way it shows a ring where the AI points and asks "Clicar aqui?" before clicking. With Codex and no
+  local model it suggests the grid instead. `brain.ollama.vision_model` picks the model ("" turns it off).
 - "mostrar grade": numbers 1-9 over the screen. Say a number to zoom into it, "clica" / "duplo" / "direito" to click
   its centre, "clica no 5" to click a cell at once, "cancela" to close. Works with the text box too (Win+F11).
 - Admin windows are refused (Windows would silently drop the click), and nothing is clicked if the window moved or
