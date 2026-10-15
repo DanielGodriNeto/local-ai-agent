@@ -31,6 +31,9 @@ PREP = re.compile(r"^\s*(?:em|no|na|nos|nas|sobre|on|o|a)\b")
 GRID = re.compile(rf"^\s*{intent.FILLER}(?:(?:mostr|abr|exib|ativ)\w*\s+)?(?:a\s+)?(?:grade|grid)(?:\s+de\s+numeros)?"
                   r"[\s.!]*$")
 STOP = re.compile(r"\b(cancel\w*|fech\w*|sai\w*|chega|stop)\b")
+# only "digita": "escreve um email" asks the AI to write one. Matched on the original text, to keep case and accents.
+TYPE = re.compile(rf"^\s*{intent.FILLER}digit(?:a|e|ar)\b[\s:,]*(.+)$", re.I | re.S)
+TYPE_MAX = 500
 NUMBERS = {"um": 1, "uma": 1, "one": 1, "dois": 2, "duas": 2, "two": 2, "tres": 3, "three": 3, "quatro": 4,
            "four": 4, "cinco": 5, "five": 5, "seis": 6, "six": 6, "sete": 7, "seven": 7, "oito": 8, "eight": 8,
            "nove": 9, "nine": 9}
@@ -46,10 +49,14 @@ dele, em coordenadas de 0 a 1000 (0,0 = canto superior esquerdo). Se nao existir
 # ---- pure: what was said, where things are ----
 
 def parse(text: str) -> Optional[dict]:
-    """{"do": "grid"} | {"do": "click", "name": str, "button": "left" | "right" | "double"} | None."""
+    """{"do": "grid"} | {"do": "click", "name": str, "button": "left" | "right" | "double"} | {"do": "type", "text": str}
+    | None."""
     t = intent.plain(text)
     if intent.question(text):
         return None
+    typed = TYPE.match(re.sub(r"^\s*(?:então|entao)[\s,]*", "", text, flags=re.I))
+    if typed:
+        return typing_text(typed.group(1))
     if GRID.match(t):
         return {"do": "grid"}
     m = CLICK.match(t)
@@ -64,6 +71,14 @@ def parse(text: str) -> Optional[dict]:
     if not name or len(name) > 60:
         return None
     return {"do": "click", "name": name, "button": button}
+
+
+def typing_text(said: str) -> Optional[dict]:
+    """What gets typed: no Enter, tab or other control keys (nothing can run a command), one line, at most TYPE_MAX.
+    ponytail: drops the full stop Whisper puts at the end; say "ponto final" style punctuation is not handled."""
+    text = " ".join("".join(c for c in said if c.isprintable() or c.isspace()).split())
+    text = text[:-1] if text.endswith(".") and not text.endswith("..") else text
+    return {"do": "type", "text": text[:TYPE_MAX]} if text else None
 
 
 def number(t: str) -> Optional[int]:
@@ -175,7 +190,9 @@ def run(cmd: dict, cfg: dict, desk, hear: Callable[[str], Optional[str]], confir
     t = desk.target()
     if t and desk.elevated_target(t):
         return "Essa janela é de administrador; não consigo clicar nela."
-    orchestrator.log({"action": "access", "do": cmd["do"]})
+    orchestrator.log({"action": "access", "do": cmd["do"]})  # never what is typed
+    if cmd["do"] == "type":
+        return type_into(cmd, desk, t, confirm)
     if cmd["do"] == "grid":
         return grid(desk, t, hear, cancel)
     if not t:
@@ -197,6 +214,19 @@ def run(cmd: dict, cfg: dict, desk, hear: Callable[[str], Optional[str]], confir
             return "(cancelado)"
         item = items[i]
     return checked_click(desk, t, center(item["rect"]), cmd["button"]) or f"Cliquei em {item['name']}."
+
+
+def type_into(cmd: dict, desk, t: Optional[dict], confirm) -> str:
+    if not t:
+        return "Não achei nenhuma janela."
+    text = cmd["text"]
+    if not confirm(f"Entendi: “{cmd.get('said', text)[:200]}”\nDigitar “{text}” em “{t['title'][:80]}”?"):
+        return "(cancelado)"
+    if not desk.still(t):
+        return "A janela mudou; não digitei nada."
+    if not desk.type_text(t, text):
+        return "Não consegui pôr essa janela em foco; não digitei nada."
+    return "Digitei."
 
 
 def checked_click(desk, t: Optional[dict], point: tuple[int, int], button: str) -> Optional[str]:
@@ -449,6 +479,35 @@ class Desk:
                 self.u.mouse_event(down, 0, 0, 0, 0)
                 self.u.mouse_event(up, 0, 0, 0, 0)
 
+    def type_text(self, t: dict, text: str) -> bool:
+        """Focus the window, check it really has focus, then send the text as Unicode key events (any language)."""
+        c, wt = self.c, self.wt
+        self.u.GetForegroundWindow.restype = c.c_void_p
+        self.u.SetForegroundWindow(wt.HWND(t["hwnd"]))
+        time.sleep(0.15)
+        if self.u.GetForegroundWindow() != t["hwnd"]:
+            return False
+
+        class Key(c.Structure):
+            _fields_ = [("vk", wt.WORD), ("scan", wt.WORD), ("flags", wt.DWORD), ("time", wt.DWORD),
+                        ("extra", c.c_size_t)]
+
+        class Mouse(c.Structure):  # only here so the union has Windows' size
+            _fields_ = [("dx", wt.LONG), ("dy", wt.LONG), ("data", wt.DWORD), ("flags", wt.DWORD), ("time", wt.DWORD),
+                        ("extra", c.c_size_t)]
+
+        class Either(c.Union):
+            _fields_ = [("ki", Key), ("mi", Mouse)]
+
+        class Input(c.Structure):
+            _fields_ = [("type", wt.DWORD), ("u", Either)]
+
+        units = text.encode("utf-16-le")
+        codes = [int.from_bytes(units[i:i + 2], "little") for i in range(0, len(units), 2)]
+        events = [Input(1, Either(ki=Key(0, code, 0x4 | up, 0, 0))) for code in codes for up in (0, 0x2)]
+        sent = self.u.SendInput(len(events), (Input * len(events))(*events), c.sizeof(Input))
+        return sent == len(events)
+
     def grid(self, rect: Rect) -> "_Shown":
         return _Shown(self.gui, rect, False, self.owner)
 
@@ -636,6 +695,14 @@ class HyprDesk:
         self.sh(["hyprctl", "dispatch", "movecursor", str(point[0]), str(point[1])])
         argv = ["ydotool", "click"] + (["--repeat", "2", "--next-delay", "80"] if button == "double" else [])
         self.sh(argv + [self.BUTTONS.get(button, "0xC0")])
+
+    def type_text(self, t: dict, text: str) -> bool:
+        """ponytail: ydotool types through a US keymap, so accents may come out wrong; wtype would fix it."""
+        self.sh(["hyprctl", "dispatch", "focuswindow", f"address:{t['hwnd']}"])
+        if (self._json("activewindow") or {}).get("address") != t["hwnd"]:
+            return False
+        self.sh(["ydotool", "type", "--", text])
+        return True
 
     def _place(self, rect: Rect) -> None:
         x, y, w, h = rect

@@ -61,6 +61,7 @@ def test_ai_point_is_strict_data_and_scaled_back():
 class FakeDesk:
     def __init__(self, items=(), top=True, elevated=False):
         self.items, self.top, self.elevated, self.clicks, self.shown = list(items), top, elevated, [], []
+        self.typed, self.focus_ok = [], True
         self.win = {"hwnd": 1, "title": "Bloco de Notas", "rect": (0, 0, 900, 600)}
 
     def target(self):
@@ -74,6 +75,10 @@ class FakeDesk:
 
     def find(self, t):
         return self.items
+
+    def type_text(self, t, text):
+        self.typed.append(text)
+        return self.focus_ok
 
     def monitor(self, t):
         return (0, 0, 900, 900)
@@ -206,3 +211,23 @@ def test_a_local_vision_model_needs_no_consent_and_answers_in_thousandths():
 def test_thousandths_are_clamped_inside_the_image():
     assert access.from_thousandths((1000, 1000), 640, 400) == (639, 399)
     assert access.from_thousandths(None, 640, 400) is None
+
+
+def test_parse_typing_keeps_case_and_accents_and_never_control_keys():
+    assert access.parse("Digita Olá, João.") == {"do": "type", "text": "Olá, João"}
+    assert access.parse("jarvis, digite: senha\n\tls -la\r") == {"do": "type", "text": "senha ls -la"}
+    assert access.parse("escreve um email pro João") is None  # that one is for the AI
+    assert access.parse("como eu digito um acento?") is None
+    assert access.parse("digita") is None
+    assert len(access.parse("digita " + "a" * 900)["text"]) == access.TYPE_MAX
+
+
+def test_typing_asks_first_and_checks_the_window():
+    desk = FakeDesk()
+    out, asked = run({"do": "type", "text": "olá", "said": "digita olá"}, desk)
+    assert asked[0].startswith("Entendi: “digita olá”") and "Bloco de Notas" in asked[0] and desk.typed == ["olá"]
+    out, _ = run({"do": "type", "text": "x"}, FakeDesk(), yes=False)
+    assert out == "(cancelado)"
+    desk = FakeDesk()
+    desk.focus_ok = False
+    assert "não digitei" in run({"do": "type", "text": "x"}, desk)[0]
