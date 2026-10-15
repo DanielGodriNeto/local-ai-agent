@@ -1,8 +1,6 @@
 import json
-import random
 from unittest import mock
 
-import laya
 import orchestrator as o
 
 CFG = o.load_config()
@@ -61,30 +59,34 @@ def test_decider_failure_fails_closed():
         launch.assert_not_called()
 
 
-def test_choose_consensus_stops_early_and_survives_shuffling():
-    calls = []
-
-    def score(opts):  # always prefers "b", wherever it sits
-        calls.append(1)
-        return [0.9 if x == "b" else 0.05 for x in opts]
-
-    assert laya.choose(score, ["a", "b", "c"], rng=random.Random(1)) == 1
-    assert len(calls) == 3
-
-
-def test_choose_runs_more_rounds_on_doubt_then_gives_up():
-    rng = random.Random(0)
-
-    def noisy(opts):  # position-biased: always picks whatever is first
-        return [0.5] + [0.5 / (len(opts) - 1)] * (len(opts) - 1)
-
-    calls = []
-    assert laya.choose(lambda o_: calls.append(1) or noisy(o_), ["a", "b", "c"], rng=rng) is None
-    assert len(calls) > 3
+def test_close_presets_ask_the_user_then_run_the_pick():
+    d = {"action": "choose", "options": ["open_browser", "open_terminal"], "task": "x"}
+    with mock.patch("os_adapter.launch") as launch:
+        assert run(d, pick=lambda q, opts: 1) == "preset: open_terminal"
+        assert launch.call_args.args[0] == {**CFG["presets"]["open_terminal"]}
+    with mock.patch("os_adapter.launch") as launch:
+        assert "cancelado" in run(d, pick=lambda q, opts: None)
+        assert "?" in run(d)  # no way to ask: it asks to repeat, never guesses
+        launch.assert_not_called()
 
 
-def test_choose_rejects_low_confidence():
-    assert laya.choose(lambda opts: [0.4 if x == "a" else 0.3 for x in opts], ["a", "b", "c"]) is None
+def test_choose_with_unknown_preset_is_rejected():
+    with mock.patch("os_adapter.launch") as launch:
+        assert "Nao entendi" in run({"action": "choose", "options": ["open_browser", "rm_rf"]}, pick=lambda q, o_: 1)
+        launch.assert_not_called()
+
+
+def test_confirmation_echoes_what_was_heard():
+    asked = []
+    with mock.patch("os_adapter.launch"):
+        o.handle("trava a tela", CFG, decide=lambda *_: {"action": "run_preset", "preset": "lock_screen"},
+                 confirm=lambda q: asked.append(q) or True)
+    assert "Entendi" in asked[0] and "trava a tela" in asked[0]
+
+
+def test_intent_decider_uses_matcher_and_exact_game_names():
+    m = mock.Mock(decide=lambda text: {"action": "run_preset", "preset": "open_browser"})
+    assert o.intent_decide("abre o navegador", CFG, m) == {"action": "run_preset", "preset": "open_browser"}
 
 
 def test_proposal_is_queued_not_activated(tmp_path):

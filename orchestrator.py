@@ -1,4 +1,4 @@
-"""Laya picks: run a preset | escalate to Claude Code | ask. Claude may propose new presets; the user approves.
+"""The intent matcher picks: run a preset | escalate to Claude Code | ask. Claude may propose new presets; the user approves.
 
 Usage: python orchestrator.py "abre o navegador" [--dry-run] [--yes] [--yes-escalate]
        python orchestrator.py --approve        # review presets proposed by Claude
@@ -14,7 +14,7 @@ import time
 from pathlib import Path
 
 import game_indexer
-import laya
+import intent
 import monitors
 import os_adapter
 import screen
@@ -22,7 +22,6 @@ import solution_picker
 
 HERE = Path(__file__).parent
 PENDING = HERE / "presets.pending.json"
-ESCALATE_OPTION = "claude: code, bugs, files, questions or any complex task (codigo, erro, arquivos, pergunta, tarefa complexa)"
 PERMISSION_MODES = {"default", "plan", "acceptEdits"}
 SHELLS = {"sh", "bash", "zsh", "fish", "cmd", "powershell", "pwsh", "eval", "env", "sudo", "doas"}
 NAME_RE = re.compile(r"^[a-z][a-z0-9_]{2,30}$")
@@ -42,29 +41,17 @@ def load_config(path: Path = HERE / "presets.json") -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def words(s: str) -> set[str]:
-    return set(re.findall(r"\w{3,}", s.lower()))
-
-
-def shortlist(text: str, presets: dict, k: int) -> list[str]:
-    """Laya's window fits ~8 options; keep the presets sharing the most words with the request."""
-    rank = sorted(presets, key=lambda n: -len(words(text) & words(n.replace("_", " ") + " " + presets[n]["description"])))
-    return rank[:k]
-
-
-def laya_decide(text: str, cfg: dict, scorer=None) -> dict:
-    lc = cfg["laya"]
+def intent_decide(text: str, cfg: dict, matcher=None) -> dict:
     game_preset = next((n for n, v in cfg["presets"].items() if v.get("kind") == "game"), None)
-    if game_preset and (named := resolve_game(text, game_preset, cfg)).get("game", {}).get("exact"):
+    if game_preset and not intent.opposing(text) and not intent.question(text)             and (named := resolve_game(text, game_preset, cfg)).get("game", {}).get("exact"):
         return named  # the request names an installed game outright: no need to ask the model
-    names = shortlist(text, cfg["presets"], lc["max_options"] - 1)
-    options = [f'{n}: {cfg["presets"][n]["description"]}' for n in names] + [ESCALATE_OPTION]
-    scorer = scorer or laya.LayaScorer(HERE / lc["model_dir"], lc["threads"])
-    pick = laya.choose(lambda opts: scorer(text, opts), options, min_rounds=lc["min_rounds"],
-                       max_rounds=lc["max_rounds"], min_conf=lc["min_conf"])
-    if pick is None or pick == len(names):  # no confident preset match: Claude handles it (user confirms)
-        return {"action": "escalate", "task": text}
-    return resolve_game(text, names[pick], cfg)
+    ic = cfg["intent"]
+    matcher = matcher or intent.Matcher(cfg["presets"], intent.E5(threads=ic["threads"]),
+                                        min_score=ic["min_score"], margin=ic["margin"])
+    decision = matcher.decide(text)
+    if decision["action"] == "run_preset":
+        return resolve_game(text, decision["preset"], cfg)
+    return decision
 
 
 def resolve_game(text: str, name: str, cfg: dict) -> dict:
@@ -85,6 +72,9 @@ def validate(decision: dict, cfg: dict) -> dict:
     if decision.get("action") == "run_preset" and decision.get("preset") in cfg["presets"]:
         return decision
     if decision.get("action") == "escalate" and decision.get("task", "").strip():
+        return decision
+    opts = decision.get("options")
+    if decision.get("action") == "choose" and isinstance(opts, list) and len(opts) >= 2             and all(n in cfg["presets"] for n in opts):
         return decision
     if decision.get("action") == "clarify":
         return decision
@@ -229,7 +219,30 @@ def terminal_confirm(question: str) -> bool:
     return sys.stdin.isatty() and input(f"{question} [s/N] ").strip().lower() in ("s", "y")
 
 
-def handle(text: str, cfg: dict, decide=laya_decide, dry_run=False, yes=False, yes_escalate=False, confirm=None, pick=None) -> str:
+def pick_preset(decision: dict, cfg: dict, pick) -> tuple[dict, str]:
+    """Two presets scored too close to call: the user picks; no way to ask means no action."""
+    names = decision["options"]
+    if not pick:
+        return {"action": "clarify"}, "Fiquei em duvida entre " + " e ".join(names) + ". Pode repetir?"
+    i = pick("Qual destes?", [cfg["presets"][n].get("description", n) for n in names])
+    if i is None or not 0 <= i < len(names):
+        return {"action": "clarify"}, "(cancelado)"
+    return {"action": "run_preset", "preset": names[i]}, ""
+
+
+def run_preset(text: str, decision: dict, cfg: dict, dry_run: bool, ask) -> str:
+    name, game = decision["preset"], decision.get("game")
+    preset = {**cfg["presets"][name], **(game or {})}
+    out = f"preset: {name}" + (f" ({game['name']})" if game else "")
+    if dry_run:
+        return out + " (dry-run)"
+    if preset["confirm"] and not ask(f'Entendi: "{text[:200]}"\nExecutar \'{name}\'?'):
+        return out + " (cancelado)"
+    os_adapter.launch(preset)
+    return out
+
+
+def handle(text: str, cfg: dict, decide=intent_decide, dry_run=False, yes=False, yes_escalate=False, confirm=None, pick=None) -> str:
     """confirm: optional callable(question)->bool (e.g. the voice overlay); default is terminal/AGENT_CONFIRM_CMD."""
     ask = confirmed if confirm is None else (lambda q, y: y or confirm(q))
     if (req := screen.parse_request(text)):
@@ -240,17 +253,11 @@ def handle(text: str, cfg: dict, decide=laya_decide, dry_run=False, yes=False, y
         decision = {"action": "clarify", "reply": f"Decisor indisponivel ({type(e).__name__})."}
     action, out = decision["action"], decision.get("reply", "")
 
+    if action == "choose":
+        decision, out = pick_preset(decision, cfg, pick)
+        action = decision["action"]
     if action == "run_preset":
-        name = decision["preset"]
-        game = decision.get("game")
-        preset = {**cfg["presets"][name], **(game or {})}
-        out = f"preset: {name}" + (f" ({game['name']})" if game else "")
-        if dry_run:
-            out += " (dry-run)"
-        elif preset["confirm"] and not ask(f"Executar '{name}'?", yes):
-            out += " (cancelado)"
-        else:
-            os_adapter.launch(preset)
+        out = run_preset(text, decision, cfg, dry_run, lambda q: ask(q, yes))
     elif action == "escalate":
         esc = cfg["escalation"]
         out = f"escalar p/ Claude Code: {decision['task']}"

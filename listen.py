@@ -1,4 +1,4 @@
-"""Voice session: one key press -> live text in the overlay -> silence ends it -> Laya decides -> action.
+"""Voice session: one key press -> live text in the overlay -> silence ends it -> intent matcher decides -> action.
 
 Bind this to a key (Hyprland: bind = SUPER, V, exec, python ~/.config/local-ai-agent/listen.py).
 """
@@ -109,21 +109,21 @@ class LazyWhisper:
         return " ".join(s.text.strip() for s in segments)
 
 
-def preload_laya(cfg: dict) -> Callable[[str, dict], dict]:
-    """Load Laya while the user is still speaking, so the decision is instant at the end."""
-    import laya
+def preload_intent(cfg: dict) -> Callable[[str, dict], dict]:
+    """Load the intent model while the user is still speaking, so the decision is instant at the end."""
+    import intent
 
-    lc = cfg["laya"]
-    scorer = laya.LayaScorer(o.HERE / lc["model_dir"], lc["threads"])
-    threading.Thread(target=scorer._load, daemon=True).start()
-    return lambda text, c: o.laya_decide(text, c, scorer)
+    ic = cfg["intent"]
+    matcher = intent.Matcher(cfg["presets"], intent.E5(threads=ic["threads"]), min_score=ic["min_score"], margin=ic["margin"])
+    threading.Thread(target=matcher.scores, args=("",), daemon=True).start()
+    return lambda text, c: o.intent_decide(text, c, matcher)
 
 
 def session(ui: overlay.Overlay, cfg: dict, blocks: Optional[Iterator[np.ndarray]] = None) -> None:
     v = cfg["voice"]
     try:
         ui.status("OUVINDO", overlay.LISTEN)
-        stt, decide = LazyWhisper(v["model"], v["language"]), preload_laya(cfg)
+        stt, decide = LazyWhisper(v["model"], v["language"]), preload_intent(cfg)
         seg = Segmenter(v["silence_s"], v["no_speech_timeout_s"], v["max_s"], v["min_rms"])
         stop = threading.Event()
         threading.Thread(target=lambda: (ui.closed.wait(), stop.set()), daemon=True).start()

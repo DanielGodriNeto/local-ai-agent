@@ -1,11 +1,8 @@
 {
-  "laya": {
-    "model_dir": "models/laya",
-    "threads": 4,
-    "min_rounds": 3,
-    "max_rounds": 9,
-    "min_conf": 0.7,
-    "max_options": 8
+  "intent": {
+    "threads": 2,
+    "min_score": 0.86,
+    "margin": 0.02
   },
   "escalation": {
     "workdir": ".",
@@ -31,6 +28,14 @@
         "start",
         "",
         "https://duckduckgo.com"
+      ],
+      "examples": [
+        "abre o navegador",
+        "abre a internet",
+        "quero navegar na internet",
+        "abre um site",
+        "open the browser",
+        "abre o chrome"
       ]
     },
     "open_terminal": {
@@ -44,6 +49,13 @@
         "/c",
         "start",
         "cmd"
+      ],
+      "examples": [
+        "abre o terminal",
+        "abre o console",
+        "abre o prompt de comando",
+        "quero um terminal",
+        "open a terminal"
       ]
     },
     "lock_screen": {
@@ -56,12 +68,27 @@
       "windows": [
         "rundll32.exe",
         "user32.dll,LockWorkStation"
+      ],
+      "examples": [
+        "trava a tela",
+        "bloqueia o computador",
+        "bloqueia a tela",
+        "trava o pc",
+        "lock the screen"
       ]
     },
     "play_game": {
       "description": "play or launch a video game (jogar, joga, jogo)",
       "confirm": false,
-      "kind": "game"
+      "kind": "game",
+      "examples": [
+        "quero jogar",
+        "abre o jogo",
+        "joga",
+        "inicia o jogo",
+        "play a game",
+        "bora jogar"
+      ]
     }
   },
   "voice": {
