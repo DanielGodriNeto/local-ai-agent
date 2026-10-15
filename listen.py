@@ -119,14 +119,23 @@ def preload_intent(cfg: dict) -> Callable[[str, dict], dict]:
     return lambda text, c: o.intent_decide(text, c, matcher)
 
 
-def session(ui: overlay.Overlay, cfg: dict, blocks: Optional[Iterator[np.ndarray]] = None) -> None:
-    v = cfg["voice"]
+def session(ui: overlay.Overlay, cfg: dict, blocks: Optional[Iterator[np.ndarray]] = None,
+            models: Optional[Callable[[], tuple]] = None, cancel: Optional[threading.Event] = None) -> None:
+    """models() -> (stt, decide) lets the daemon keep them loaded. Closing the overlay or cancel stops everything."""
+    v, cancel = cfg["voice"], cancel or threading.Event()
     try:
         ui.status("OUVINDO", overlay.LISTEN)
-        stt, decide = LazyWhisper(v["model"], v["language"]), preload_intent(cfg)
+        stt, decide = models() if models else (LazyWhisper(v["model"], v["language"]), preload_intent(cfg))
         seg = Segmenter(v["silence_s"], v["no_speech_timeout_s"], v["max_s"], v["min_rms"])
         stop = threading.Event()
-        threading.Thread(target=lambda: (ui.closed.wait(), stop.set()), daemon=True).start()
+
+        def watch():
+            while not (ui.closed.wait(0.1) or cancel.is_set()):
+                pass
+            stop.set()
+            cancel.set()  # also kills the AI and its child processes
+            ui.close()
+        threading.Thread(target=watch, daemon=True).start()
         text = listen(blocks or mic_blocks(stop), seg, stt, ui.text, v["partial_every_s"])
         if not text:
             ui.status("NADA OUVIDO", overlay.IDLE)
@@ -142,7 +151,7 @@ def session(ui: overlay.Overlay, cfg: dict, blocks: Optional[Iterator[np.ndarray
             return ok
 
         out = o.handle(text, cfg, decide=decide, confirm=confirm,
-                       pick=lambda q, opts: ui.choose(q, opts))
+                       pick=lambda q, opts: ui.choose(q, opts), cancel=cancel)
         ui.status("PRONTO", overlay.GREEN)
         out = out.strip()[:600]
         ui.text(out or "Feito.")

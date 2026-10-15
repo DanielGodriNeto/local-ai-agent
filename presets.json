@@ -105,6 +105,7 @@
       ]
     }
   },
+  "daemon": {"mode": "leve", "unload_after_s": 300},
   "voice": {
     "model": "base",
     "language": "pt",

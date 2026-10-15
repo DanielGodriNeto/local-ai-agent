@@ -15,13 +15,13 @@ Goal: feel like a resident personal assistant ("Jarvis"), light on RAM, works wi
 
 ## Security checklist (Phase A)
 
-- [ ] Brains run in a neutral empty working dir (no repo hooks/MCP picked up), prompt on stdin, never argv.
-- [ ] Read-only by default: Claude `Read Grep Glob`; Codex `--sandbox read-only`; Gemini without auto-approve; Ollama has no tools.
-- [ ] Ollama URL must be loopback.
-- [ ] Cancel kills the whole process tree (Windows `taskkill /T /F`).
-- [ ] Daemon socket on 127.0.0.1 only, accepts a fixed command set, requires a per-user token file.
-- [ ] Ambiguous or low-confidence intent never runs a preset; confirm-flagged presets still confirm.
-- [ ] Polarity guard: a request with an opposing verb (fecha, para, desliga, encerra, cancela) never runs an "open/start" preset.
+- [x] Brains run in a neutral empty working dir (no repo hooks/MCP picked up), prompt on stdin, never argv.
+- [x] Read-only by default: Claude `Read Grep Glob`; Codex `--sandbox read-only`; Gemini without auto-approve; Ollama has no tools.
+- [x] Ollama URL must be loopback.
+- [x] Cancel kills the whole process tree (Windows `taskkill /T /F`).
+- [x] Daemon socket on 127.0.0.1 only, accepts a fixed command set, requires a per-user token file.
+- [x] Ambiguous or low-confidence intent never runs a preset; confirm-flagged presets still confirm.
+- [x] Polarity guard: a request with an opposing verb (fecha, para, desliga, encerra, cancela) never runs an "open/start" preset.
 - [ ] Every confirmation echoes the transcribed text ("Entendi: ...").
 - [ ] Session ids stored per brain (`--resume <id>`, never `--continue`); Ollama/Gemini replay last N turns from RAM.
 - [ ] Screen image mode: pass the image dir explicitly per brain (Claude `--add-dir`), or fall back to OCR text.

@@ -129,9 +129,9 @@ class Overlay:
     # ---- internals (Tk thread) ----
     def _wait(self, question: str, hint: str, choices: int, timeout: float):
         ev, box = threading.Event(), [None]
+        self._answer, self._choices = (ev, box), choices  # set now, so a close before the redraw still answers no
 
         def show():
-            self._answer, self._choices = (ev, box), choices
             self._state, self._label, self._fg, self._hint = LISTEN, question, "fg", hint
             self._draw()
             self.root.focus_force()
@@ -170,6 +170,7 @@ class Overlay:
             self.on_move(self.kind, k["x_pct"], k["y_pct"])
 
     def _close(self) -> None:
+        self._reply(None)  # a pending question gets "no", never a wait until timeout
         self.closed.set()
         self.root.destroy()
 

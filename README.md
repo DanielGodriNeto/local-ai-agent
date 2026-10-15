@@ -23,6 +23,11 @@ python orchestrator.py "abre o navegador" --dry-run   # text mode
 Hyprland: `bind = SUPER, V, exec, ~/.config/local-ai-agent/voice_trigger.sh`
 Windows: `python hotkey_windows.py` (Win+F12, easy to bind to a mouse button; Win+V is reserved by Windows)
 
+The hotkey talks to a resident agent (`agentd.py`), started on the first press. Press again to cancel (mic, AI and its
+child processes). `daemon.mode` in `presets.json`: `leve` (default) frees the speech and intent models after
+`unload_after_s` idle, about 53 MB before first use, ~400 MB while listening, ~145 MB after unloading; `rapido` keeps them
+loaded for instant start. The conversation memory survives either way. `python agentd.py --quit` stops it.
+
 ## Screen reading
 
 Monitors are numbered: **1 = primary**, the rest left to right (`python monitors.py` lists them). Ask by voice:
