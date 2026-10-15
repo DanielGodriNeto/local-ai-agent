@@ -130,6 +130,9 @@ class Overlay:
     def _wait(self, question: str, hint: str, choices: int, timeout: float):
         ev, box = threading.Event(), [None]
         self._answer, self._choices = (ev, box), choices  # set now, so a close before the redraw still answers no
+        if self.closed.is_set():  # already closed (cancelled): nobody can answer
+            self._answer, self._choices = None, 0
+            return None
 
         def show():
             self._state, self._label, self._fg, self._hint = LISTEN, question, "fg", hint
@@ -170,8 +173,8 @@ class Overlay:
             self.on_move(self.kind, k["x_pct"], k["y_pct"])
 
     def _close(self) -> None:
+        self.closed.set()  # first, so a question asked from now on sees it
         self._reply(None)  # a pending question gets "no", never a wait until timeout
-        self.closed.set()
         self.root.destroy()
 
     def _pump(self) -> None:

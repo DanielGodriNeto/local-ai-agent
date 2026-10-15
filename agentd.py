@@ -4,11 +4,13 @@
     python agentd.py --toggle   what the hotkey sends: start a voice session, or cancel the one running
     python agentd.py --quit
 
-The hotkey is a tiny client: one line `<token> <command>` to 127.0.0.1, where the token is a per-user secret file.
+The hotkey is a tiny client on 127.0.0.1. The daemon sends a nonce, the client answers `<hmac> <command>` with
+HMAC-SHA256(token, nonce + command), so the per-user token never crosses the socket, even to a process squatting the port.
 Mode "leve" frees the speech and intent models after `unload_after_s` idle; "rapido" keeps them. The AI conversation
 memory survives either way.
 """
 import argparse
+import hashlib
 import hmac
 import os
 import queue
@@ -34,17 +36,25 @@ def token(path: Optional[Path] = None) -> str:
         path.parent.mkdir(parents=True, exist_ok=True)
         fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     except FileExistsError:
-        return path.read_text().strip()
+        for _ in range(40):  # another process may have created it and not written it yet
+            t = path.read_text().strip()
+            if t:
+                return t
+            time.sleep(0.05)
+        raise RuntimeError(f"token vazio em {path}")
     with os.fdopen(fd, "w") as f:
         f.write(secrets.token_hex(16))
     return path.read_text().strip()
 
 
+def sign(secret: str, nonce: str, cmd: str) -> str:
+    return hmac.new(secret.encode(), f"{nonce} {cmd}".encode(), hashlib.sha256).hexdigest()
+
+
 # ---- daemon side ---------------------------------------------------------------------------------------------------
 
 def serve(sock: socket.socket, secret: str, on_command: Callable[[str], None]) -> None:
-    """Accept loop. Fixed command set; a wrong token or command gets "no" and changes nothing.
-    ponytail: another local user could squat the port first and read the token; a named pipe/Unix socket fixes it."""
+    """Accept loop. Fixed command set; a wrong signature or command gets "no" and changes nothing."""
     while True:
         try:
             conn, _ = sock.accept()
@@ -52,12 +62,14 @@ def serve(sock: socket.socket, secret: str, on_command: Callable[[str], None]) -
             return  # socket closed: shutting down
         with conn:
             conn.settimeout(2)
+            nonce = secrets.token_hex(16)  # fresh per connection: a recorded answer cannot be replayed
             try:
-                line = conn.makefile(encoding="utf-8", errors="replace").readline(80)
+                conn.sendall(f"{nonce}\n".encode())
+                line = conn.makefile(encoding="utf-8", errors="replace").readline(100)
             except OSError:
                 continue
-            tok, _, cmd = line.strip().partition(" ")
-            ok = hmac.compare_digest(tok.encode(), secret.encode()) and cmd in COMMANDS
+            mac, _, cmd = line.strip().partition(" ")
+            ok = cmd in COMMANDS and hmac.compare_digest(mac.encode(), sign(secret, nonce, cmd).encode())
             try:
                 conn.sendall(b"ok\n" if ok else b"no\n")
             except OSError:
@@ -97,6 +109,8 @@ class Models:
         return self.pair
 
     def unload_if_idle(self, busy: bool) -> bool:
+        if busy:
+            self.last = time.time()  # idle counts from the end of a session, not its start
         if self.pair is None or busy or time.time() - self.last < self.unload_after_s:
             return False
         self.pair = None
@@ -136,16 +150,20 @@ def run_daemon() -> None:
     agent, commands = Agent(start), queue.Queue()
 
     def pump():
-        while not commands.empty():
-            cmd = commands.get()
-            if cmd == "quit":
-                agent.cancel.set()
-                sock.close()
-                root.after(300, root.destroy)
-                return
-            agent.toggle()
-        if d.get("mode", "leve") == "leve":
-            models.unload_if_idle(agent.busy())
+        try:
+            while not commands.empty():
+                if commands.get() == "quit":
+                    agent.cancel.set()
+                    sock.close()
+                    root.after(300, root.destroy)
+                    return
+                agent.toggle()
+            if d.get("mode", "leve") == "leve":
+                models.unload_if_idle(agent.busy())
+        except Exception:  # a bad config or Tk error must not leave a daemon that says "ok" and does nothing
+            import traceback
+            with open(HOME / "agentd.log", "a", encoding="utf-8") as log:
+                traceback.print_exc(file=log)
         root.after(100, pump)
 
     threading.Thread(target=serve, args=(sock, token(), commands.put), daemon=True).start()
@@ -173,8 +191,11 @@ def send(cmd: str, start_if_down: bool = True, wait_s: float = 15, port: int = P
     while True:
         try:
             with socket.create_connection(("127.0.0.1", port), timeout=2) as c:
-                c.sendall(f"{token()} {cmd}\n".encode())
-                return c.recv(8).startswith(b"ok")
+                f = c.makefile("rwb")
+                nonce = f.readline(40).decode(errors="replace").strip()
+                f.write(f"{sign(token(), nonce, cmd)} {cmd}\n".encode())
+                f.flush()
+                return f.readline(8).startswith(b"ok")
         except (ConnectionRefusedError, socket.timeout):
             if not start_if_down or time.time() > deadline:
                 return False

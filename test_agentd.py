@@ -19,20 +19,44 @@ def daemon(tmp_path, monkeypatch):
     sock.close()
 
 
-def raw(port, line):
+def raw(port, answer):
+    """answer(nonce) -> the line to send back."""
     with socket.create_connection(("127.0.0.1", port), timeout=2) as c:
-        c.sendall(line.encode())
-        return c.recv(8)
+        f = c.makefile("rwb")
+        nonce = f.readline().decode().strip()
+        f.write(answer(nonce).encode())
+        f.flush()
+        return f.readline()
 
 
 def test_only_the_token_holder_with_a_known_command_is_obeyed(daemon):
     port, got = daemon
+    secret = agentd.token()
     assert agentd.send("toggle", start_if_down=False, port=port)
-    assert raw(port, "wrong toggle\n") == b"no\n"
-    assert raw(port, f"{agentd.token()} rm -rf\n") == b"no\n"
-    assert raw(port, "GET / HTTP/1.1\r\n") == b"no\n"  # a web page poking localhost gets nothing
+    assert raw(port, lambda n: "wrong toggle\n") == b"no\n"
+    assert raw(port, lambda n: f"{secret} toggle\n") == b"no\n"  # the raw token is never the answer
+    assert raw(port, lambda n: f"{agentd.sign(secret, n, 'rm')} rm\n") == b"no\n"
+    assert raw(port, lambda n: f"{agentd.sign(secret, 'old', 'toggle')} toggle\n") == b"no\n"  # replay
+    assert raw(port, lambda n: "GET / HTTP/1.1\r\n") == b"no\n"  # a web page poking localhost gets nothing
     time.sleep(0.1)
     assert got == ["toggle"]
+
+
+def test_a_port_squatter_never_sees_the_token(tmp_path, monkeypatch):
+    monkeypatch.setattr(agentd, "TOKEN", tmp_path / "t")
+    squat = socket.create_server(("127.0.0.1", 0))
+    seen = []
+
+    def fake_daemon():
+        c, _ = squat.accept()
+        with c:
+            c.sendall(b"n0nce\n")
+            seen.append(c.makefile("rb").readline())
+            c.sendall(b"ok\n")
+    threading.Thread(target=fake_daemon, daemon=True).start()
+    agentd.send("toggle", start_if_down=False, port=squat.getsockname()[1])
+    assert seen and agentd.token().encode() not in seen[0]
+    squat.close()
 
 
 def test_token_is_created_once_and_kept(tmp_path):
@@ -69,6 +93,8 @@ def test_idle_unload_frees_models_but_keeps_the_conversation():
     assert not models.unload_if_idle(busy=False)  # not idle yet
     models.last -= 61
     assert not models.unload_if_idle(busy=True)  # never under a running session
+    assert not models.unload_if_idle(busy=False)  # idle restarts when the session ends
+    models.last -= 61
     assert models.unload_if_idle(busy=False) and models.pair is None
     assert o.CONV.session == "s1"
     models()
@@ -89,3 +115,5 @@ def test_closing_the_overlay_answers_no_at_once():
     ui._close()
     t.join(2)
     assert out == [False] and time.time() - started < 1
+    started = time.time()
+    assert ui.ask("Depois de fechado?", timeout=10) is False and time.time() - started < 1  # cancelled earlier
