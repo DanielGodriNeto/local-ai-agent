@@ -198,10 +198,19 @@ def handle_screen(text: str, req: dict, cfg: dict, dry_run: bool, confirm, pick)
             screen.cleanup(img_path)
 
 
+LOG_MAX = 1 << 20  # past 1 MB the log becomes agent.log.1.jsonl (replacing the older one): at most ~2 MB on disk
+
+
 def log(entry: dict) -> None:
     """Metadata only: no free text, no model output."""
     entry["ts"] = time.strftime("%Y-%m-%dT%H:%M:%S")
-    fd = os.open(HERE / "agent.log.jsonl", os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+    path = HERE / "agent.log.jsonl"
+    try:
+        if path.stat().st_size > LOG_MAX:
+            os.replace(path, HERE / "agent.log.1.jsonl")
+    except OSError:  # no log yet, or another process just rotated it
+        pass
+    fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
     with os.fdopen(fd, "a", encoding="utf-8") as f:
         f.write(json.dumps(entry) + "\n")
 

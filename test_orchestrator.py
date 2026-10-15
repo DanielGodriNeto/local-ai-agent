@@ -226,3 +226,12 @@ def test_codex_quick_still_asks_because_its_shell_can_read_any_file():
         assert ask.calls == [] and "qualquer arquivo" in asked[0]
     with mock.patch("brains.pick", return_value="claude"), mock.patch("brains.ask", fake_ask("Paris")):
         assert run(d) == "Paris"
+
+
+def test_log_rotates_past_its_cap(tmp_path, monkeypatch):
+    monkeypatch.setattr(o, "HERE", tmp_path)
+    monkeypatch.setattr(o, "LOG_MAX", 100)
+    for i in range(10):
+        o.log({"action": "x", "i": i})
+    old, new = (tmp_path / "agent.log.1.jsonl").read_text(), (tmp_path / "agent.log.jsonl").read_text()
+    assert len(new) <= 100 + 60 and '"i": 9' in new and old and not (tmp_path / "agent.log.2.jsonl").exists()
