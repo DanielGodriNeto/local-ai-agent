@@ -1,4 +1,7 @@
-"""Defaults in config.default.json, user overrides in config.json (git-ignored, written by settings.py)."""
+"""One config: defaults in config.default.json (in the repo), your overrides in config.json (git-ignored).
+
+config.json only needs the keys you change, e.g. {"brain": {"use": "ollama"}, "voice": {"model": "small"}}.
+"""
 import copy
 import json
 from pathlib import Path
@@ -24,5 +27,12 @@ def load(user: Path = USER, default: Path = DEFAULT) -> dict:
     return cfg
 
 
-def save(cfg: dict, user: Path = USER) -> None:
-    user.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
+def save(changes: dict, user: Path = USER) -> None:
+    """Merge changes into the user's overrides; keys not in changes are kept."""
+    current: dict = {}
+    if user.exists():
+        try:
+            current = json.loads(user.read_text(encoding="utf-8"))
+        except ValueError:
+            pass
+    user.write_text(json.dumps(_merge(current, changes), ensure_ascii=False, indent=2), encoding="utf-8")

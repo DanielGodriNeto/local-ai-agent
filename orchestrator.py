@@ -1,4 +1,4 @@
-"""Laya picks: run a preset | escalate to Claude Code | ask. Claude may propose new presets; the user approves.
+"""The intent matcher picks: run a preset | escalate to Claude Code | ask. Claude may propose new presets; the user approves.
 
 Usage: python orchestrator.py "abre o navegador" [--dry-run] [--yes] [--yes-escalate]
        python orchestrator.py --approve        # review presets proposed by Claude
@@ -7,14 +7,15 @@ import argparse
 import json
 import os
 import re
-import shutil
 import subprocess
 import sys
 import time
 from pathlib import Path
 
+import brains
+import config
 import game_indexer
-import laya
+import intent
 import monitors
 import os_adapter
 import screen
@@ -22,8 +23,7 @@ import solution_picker
 
 HERE = Path(__file__).parent
 PENDING = HERE / "presets.pending.json"
-ESCALATE_OPTION = "claude: code, bugs, files, questions or any complex task (codigo, erro, arquivos, pergunta, tarefa complexa)"
-PERMISSION_MODES = {"default", "plan", "acceptEdits"}
+BRAIN_NAMES = {"claude": "Claude Code", "codex": "Codex", "ollama": "a IA local"}
 SHELLS = {"sh", "bash", "zsh", "fish", "cmd", "powershell", "pwsh", "eval", "env", "sudo", "doas"}
 NAME_RE = re.compile(r"^[a-z][a-z0-9_]{2,30}$")
 PROPOSAL_RE = re.compile(r"```preset\s*(\{.*?\})\s*```", re.S)
@@ -38,33 +38,21 @@ Se houver varias solucoes realmente distintas e a escolha for do usuario, NAO im
 ```options {{"question": "pergunta curta", "options": ["solucao 1", "solucao 2"]}}``` (2 a 9 opcoes curtas)."""
 
 
-def load_config(path: Path = HERE / "presets.json") -> dict:
-    return json.loads(path.read_text(encoding="utf-8"))
+def load_config(user: Path = config.USER) -> dict:
+    return config.load(user)
 
 
-def words(s: str) -> set[str]:
-    return set(re.findall(r"\w{3,}", s.lower()))
-
-
-def shortlist(text: str, presets: dict, k: int) -> list[str]:
-    """Laya's window fits ~8 options; keep the presets sharing the most words with the request."""
-    rank = sorted(presets, key=lambda n: -len(words(text) & words(n.replace("_", " ") + " " + presets[n]["description"])))
-    return rank[:k]
-
-
-def laya_decide(text: str, cfg: dict, scorer=None) -> dict:
-    lc = cfg["laya"]
+def intent_decide(text: str, cfg: dict, matcher=None) -> dict:
     game_preset = next((n for n, v in cfg["presets"].items() if v.get("kind") == "game"), None)
-    if game_preset and (named := resolve_game(text, game_preset, cfg)).get("game", {}).get("exact"):
+    if game_preset and not intent.opposing(text) and not intent.question(text)             and (named := resolve_game(text, game_preset, cfg)).get("game", {}).get("exact"):
         return named  # the request names an installed game outright: no need to ask the model
-    names = shortlist(text, cfg["presets"], lc["max_options"] - 1)
-    options = [f'{n}: {cfg["presets"][n]["description"]}' for n in names] + [ESCALATE_OPTION]
-    scorer = scorer or laya.LayaScorer(HERE / lc["model_dir"], lc["threads"])
-    pick = laya.choose(lambda opts: scorer(text, opts), options, min_rounds=lc["min_rounds"],
-                       max_rounds=lc["max_rounds"], min_conf=lc["min_conf"])
-    if pick is None or pick == len(names):  # no confident preset match: Claude handles it (user confirms)
-        return {"action": "escalate", "task": text}
-    return resolve_game(text, names[pick], cfg)
+    ic = cfg["intent"]
+    matcher = matcher or intent.Matcher(cfg["presets"], intent.E5(threads=ic["threads"]),
+                                        min_score=ic["min_score"], margin=ic["margin"])
+    decision = matcher.decide(text)
+    if decision["action"] == "run_preset":
+        return resolve_game(text, decision["preset"], cfg)
+    return decision
 
 
 def resolve_game(text: str, name: str, cfg: dict) -> dict:
@@ -85,6 +73,9 @@ def validate(decision: dict, cfg: dict) -> dict:
     if decision.get("action") == "run_preset" and decision.get("preset") in cfg["presets"]:
         return decision
     if decision.get("action") == "escalate" and decision.get("task", "").strip():
+        return decision
+    opts = decision.get("options")
+    if decision.get("action") == "choose" and isinstance(opts, list) and len(opts) >= 2             and all(n in cfg["presets"] for n in opts):
         return decision
     if decision.get("action") == "clarify":
         return decision
@@ -116,9 +107,10 @@ def save_proposals(output: str, cfg: dict) -> str:
     return PROPOSAL_RE.sub("", output).strip()
 
 
-def approve(cfg_path: Path = HERE / "presets.json", ask=input) -> int:
-    """Interactive: show each proposed command verbatim; merge the ones the user accepts."""
+def approve(cfg_path: Path = config.USER, ask=input) -> int:
+    """Interactive: show each proposed command verbatim; accepted ones are saved to the user's config.json."""
     cfg = load_config(cfg_path)
+    new: dict = {}
     pending = json.loads(PENDING.read_text(encoding="utf-8")) if PENDING.exists() else []
     added = 0
     for p in pending:
@@ -131,36 +123,37 @@ def approve(cfg_path: Path = HERE / "presets.json", ask=input) -> int:
         if ask("Aprovar? [s/N] ").strip().lower() not in ("s", "y"):
             continue
         auto = ask("Rodar sem confirmar nas proximas vezes? [s/N] ").strip().lower() in ("s", "y")
-        cfg["presets"][p["name"]] = {"description": p["description"], "confirm": not auto,
-                                     **{k: p[k] for k in ("linux", "windows") if k in p}}
+        cfg["presets"][p["name"]] = new[p["name"]] = {"description": p["description"], "confirm": not auto,
+                                                      **{k: p[k] for k in ("linux", "windows") if k in p}}
         added += 1
-    cfg_path.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
+    if new:
+        config.save({"presets": new}, cfg_path)
     PENDING.unlink(missing_ok=True)
     return added
 
 
-def escalate(task: str, cfg: dict, pick=None, extra_dirs=()) -> str:
-    """Hand the task to Claude Code headless. Task goes via stdin so it can never be read as a flag."""
-    esc = cfg["escalation"]
-    claude = shutil.which("claude")
-    if not claude:
-        return "claude CLI nao encontrado no PATH"
-    if esc["permission_mode"] not in PERMISSION_MODES:
-        return f"permission_mode invalido: {esc['permission_mode']}"
-    argv = [claude, "-p", "--permission-mode", esc["permission_mode"], "--allowedTools", *esc["allowed_tools"]]
-    for d in extra_dirs:
-        argv += ["--add-dir", str(d)]
-    workdir = (HERE / Path(esc["workdir"]).expanduser()).resolve()
-    res = subprocess.run(argv, input=WRAPPER.format(task=task), cwd=workdir, capture_output=True,
-                         text=True, timeout=esc["timeout_s"])
-    out, choice = solution_picker.parse_options((res.stdout or res.stderr).strip())
-    if choice and pick:
-        i = pick(choice["question"], choice["options"])
-        if i is not None:  # one follow-up in the same conversation; the option text is data, sent on stdin
-            res = subprocess.run([*argv, "--continue"], input=f"Escolha do usuario: {choice['options'][i]}. Prossiga com essa opcao.",
-                                 cwd=workdir, capture_output=True, text=True, timeout=esc["timeout_s"])
-            out = (res.stdout or res.stderr).strip()
+CONV = brains.Conversation()  # short-term memory; lives as long as the process (the daemon keeps it)
+
+
+def escalate(task: str, cfg: dict, pick=None, extra_dirs=(), mode="task", on_event=None, cancel=None) -> str:
+    """Hand the request to the user's AI (Claude Code, Codex or Ollama). The text goes on stdin, never as a flag."""
+    CONV.idle_s = cfg["brain"].get("memory_idle_s", 600)
+    ask = lambda prompt, m: brains.ask(cfg, prompt, m, CONV, on_event or (lambda e: None), cancel, extra_dirs)
+    try:
+        out, choice = solution_picker.parse_options(ask(WRAPPER.format(task=task) if mode == "task" else task, mode).strip())
+        if choice and pick:
+            i = pick(choice["question"], choice["options"])
+            if i is not None:  # one follow-up in the same conversation; the option text is data, sent on stdin
+                out = ask(f"Escolha do usuario: {choice['options'][i]}. Prossiga com essa opcao.", "task").strip()
+    except brains.Cancelled:
+        return "(cancelado)"
+    except (OSError, TimeoutError, ValueError) as e:
+        return f"A IA falhou ({type(e).__name__}): {e}"[:300]
     return save_proposals(out, cfg)
+
+
+def brain_name(cfg: dict) -> str:
+    return BRAIN_NAMES.get(brains.pick(cfg) or "", "a IA")
 
 
 SCREEN_CONTEXT = """{task}
@@ -184,7 +177,9 @@ def handle_screen(text: str, req: dict, cfg: dict, dry_run: bool, confirm, pick)
     try:
         img = screen.capture(mons[n - 1])
         if req["image"]:
-            if not confirm(f"Enviar a IMAGEM INTEIRA do monitor {n} ao Claude Code? (pode conter senhas e mensagens)"):
+            if brains.pick(cfg) == "ollama":
+                return "Ler a imagem da tela precisa de Claude Code ou Codex; peça o texto (\"o que tem no monitor\")."
+            if not confirm(f"Enviar a IMAGEM INTEIRA do monitor {n} para {brain_name(cfg)}? (pode conter senhas e mensagens)"):
                 return out + " (cancelado)"
             img_path = screen.save_temp(img)
             content, extra = f"Imagem em {img_path} (leia com a ferramenta Read).", (img_path.parent,)
@@ -192,7 +187,7 @@ def handle_screen(text: str, req: dict, cfg: dict, dry_run: bool, confirm, pick)
             content = screen.ocr_text(img)
             if not content.strip():
                 return f"Nao achei texto no monitor {n}."
-            if not confirm(f"Enviar este texto do monitor {n} ao Claude Code?\n{content}"):
+            if not confirm(f"Enviar este texto do monitor {n} para {brain_name(cfg)}?\n{content}"):
                 return out + " (cancelado)"
             extra = ()
         task = SCREEN_CONTEXT.format(task=text, n=n, what=mode, content=content)
@@ -216,7 +211,10 @@ def confirmed(question: str, yes: bool) -> bool:
     if yes:
         return True
     if sys.stdin.isatty():
-        return input(f"{question} [s/N] ").strip().lower() in ("s", "y")
+        try:
+            return input(f"{question} [s/N] ").strip().lower() in ("s", "y")
+        except EOFError:  # stdin closed: no answer is a no
+            return False
     cmd = os.environ.get("AGENT_CONFIRM_CMD")
     if not cmd:
         return False
@@ -229,7 +227,51 @@ def terminal_confirm(question: str) -> bool:
     return sys.stdin.isatty() and input(f"{question} [s/N] ").strip().lower() in ("s", "y")
 
 
-def handle(text: str, cfg: dict, decide=laya_decide, dry_run=False, yes=False, yes_escalate=False, confirm=None, pick=None) -> str:
+def pick_preset(decision: dict, cfg: dict, pick) -> tuple[dict, str]:
+    """Two presets scored too close to call: the user picks; no way to ask means no action."""
+    names = decision["options"]
+    if not pick:
+        return {"action": "clarify"}, "Fiquei em duvida entre " + " e ".join(names) + ". Pode repetir?"
+    i = pick("Qual destes?", [cfg["presets"][n].get("description", n) for n in names])
+    if i is None or not 0 <= i < len(names):
+        return {"action": "clarify"}, "(cancelado)"
+    return {"action": "run_preset", "preset": names[i]}, ""
+
+
+def run_preset(text: str, decision: dict, cfg: dict, dry_run: bool, ask) -> str:
+    name, game = decision["preset"], decision.get("game")
+    preset = {**cfg["presets"][name], **(game or {})}
+    out = f"preset: {name}" + (f" ({game['name']})" if game else "")
+    if dry_run:
+        return out + " (dry-run)"
+    if preset["confirm"] and not ask(f'Entendi: "{text[:200]}"\nExecutar \'{name}\'?'):
+        return out + " (cancelado)"
+    os_adapter.launch(preset)
+    return out
+
+
+def escalate_with_consent(decision: dict, cfg: dict, dry_run: bool, ask, pick, on_event, cancel) -> str:
+    """Quick questions go straight to the AI (only your words leave; no tools). Tasks that read files ask first,
+    unless brain.confirm_quick says quick ones must ask too."""
+    mode, name, toolless = decision.get("mode", "task"), brain_name(cfg), brains.pick(cfg) in brains.TOOLLESS_QUICK
+    out = f"{name} ({mode}): {decision['task']}"
+    if dry_run:
+        return out + " (dry-run)"
+    # Codex cannot turn its shell off: even read-only it can read any file, so it always asks first
+    if mode == "task" or cfg["brain"].get("confirm_quick") or not toolless:
+        if not toolless:
+            reach = "Ele pode LER qualquer arquivo do PC (sem alterar nada)."
+        elif mode == "task":
+            reach = f"Ele so pode ler arquivos em {brains.workdir(cfg)}."
+        else:
+            reach = "So o seu pedido sai do PC."
+        if not ask(f'Entendi: "{decision["task"][:300]}"\nPedir para {name}? {reach}'):
+            return out + " (cancelado)"
+    return escalate(decision["task"], cfg, pick, mode=mode, on_event=on_event, cancel=cancel)
+
+
+def handle(text: str, cfg: dict, decide=intent_decide, dry_run=False, yes=False, yes_escalate=False, confirm=None,
+           pick=None, on_event=None, cancel=None) -> str:
     """confirm: optional callable(question)->bool (e.g. the voice overlay); default is terminal/AGENT_CONFIRM_CMD."""
     ask = confirmed if confirm is None else (lambda q, y: y or confirm(q))
     if (req := screen.parse_request(text)):
@@ -240,28 +282,13 @@ def handle(text: str, cfg: dict, decide=laya_decide, dry_run=False, yes=False, y
         decision = {"action": "clarify", "reply": f"Decisor indisponivel ({type(e).__name__})."}
     action, out = decision["action"], decision.get("reply", "")
 
+    if action == "choose":
+        decision, out = pick_preset(decision, cfg, pick)
+        action = decision["action"]
     if action == "run_preset":
-        name = decision["preset"]
-        game = decision.get("game")
-        preset = {**cfg["presets"][name], **(game or {})}
-        out = f"preset: {name}" + (f" ({game['name']})" if game else "")
-        if dry_run:
-            out += " (dry-run)"
-        elif preset["confirm"] and not ask(f"Executar '{name}'?", yes):
-            out += " (cancelado)"
-        else:
-            os_adapter.launch(preset)
+        out = run_preset(text, decision, cfg, dry_run, lambda q: ask(q, yes))
     elif action == "escalate":
-        esc = cfg["escalation"]
-        out = f"escalar p/ Claude Code: {decision['task']}"
-        question = (f"Enviar ao Claude Code?\n  tarefa: {decision['task'][:300]}\n"
-                    f"  ferramentas: {esc['allowed_tools']}  modo: {esc['permission_mode']}  pasta: {esc['workdir']}")
-        if dry_run:
-            out += " (dry-run)"
-        elif ask(question, yes_escalate):
-            out = escalate(decision["task"], cfg, pick)
-        else:
-            out += " (cancelado)"
+        out = escalate_with_consent(decision, cfg, dry_run, lambda q: ask(q, yes_escalate), pick, on_event, cancel)
     log({"action": action, "preset": decision.get("preset"), "input_len": len(text), "dry_run": dry_run})
     return out
 

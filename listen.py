@@ -1,4 +1,4 @@
-"""Voice session: one key press -> live text in the overlay -> silence ends it -> Laya decides -> action.
+"""Voice session: one key press -> live text in the overlay -> silence ends it -> intent matcher decides -> action.
 
 Bind this to a key (Hyprland: bind = SUPER, V, exec, python ~/.config/local-ai-agent/listen.py).
 """
@@ -11,24 +11,63 @@ from typing import Callable, Iterator, Optional
 
 import numpy as np
 
+import access
+import earcons
 import orchestrator as o
 import overlay
+import tts
 
 RATE, BLOCK_S = 16000, 0.1
+SHORT = 120  # answers up to this length fade after a few seconds; longer ones stay until Esc, click or hotkey
+HISTORY: deque = deque(maxlen=10)  # (what was said, answer); RAM only, gone when the agent stops
+
+
+class SileroVAD:
+    """Speech probability per block, streamed through the Silero v6 model that ships with faster-whisper (~2 MB).
+    Fans, music and keyboard clicks score low, unlike plain loudness."""
+    CHUNK, CONTEXT = 512, 64
+
+    def __init__(self):
+        import os
+
+        import faster_whisper.vad
+        import onnxruntime as ort
+
+        opts = ort.SessionOptions()
+        opts.intra_op_num_threads, opts.inter_op_num_threads, opts.log_severity_level = 1, 1, 4
+        path = os.path.join(os.path.dirname(faster_whisper.vad.__file__), "assets", "silero_vad_v6.onnx")
+        self.sess = ort.InferenceSession(path, opts, providers=["CPUExecutionProvider"])
+        self.h = self.c = np.zeros((1, 1, 128), np.float32)
+        self.ctx, self.rest = np.zeros(self.CONTEXT, np.float32), np.zeros(0, np.float32)
+
+    def __call__(self, block: np.ndarray) -> float:
+        audio, best = np.concatenate([self.rest, block.astype(np.float32)]), 0.0
+        n = len(audio) // self.CHUNK * self.CHUNK
+        for chunk in audio[:n].reshape(-1, self.CHUNK):
+            out, self.h, self.c = self.sess.run(None, {"input": np.concatenate([self.ctx, chunk])[None],
+                                                       "h": self.h, "c": self.c})
+            self.ctx, best = chunk[-self.CONTEXT:], max(best, float(out.ravel()[0]))
+        self.rest = audio[n:]
+        return best
 
 
 class Segmenter:
-    """Energy VAD over 100 ms blocks. feed() -> 'start' | 'end' | 'timeout' | None."""
+    """Speech segmentation over 100 ms blocks. feed() -> 'start' | 'end' | 'timeout' | None.
+    With a vad (block -> speech probability) it uses that; without, plain loudness against the room noise."""
 
-    def __init__(self, silence_s=1.0, no_speech_s=6.0, max_s=20.0, min_rms=0.012):
+    def __init__(self, silence_s=1.0, no_speech_s=6.0, max_s=20.0, min_rms=0.012,
+                 vad: Optional[Callable[[np.ndarray], float]] = None):
         self.silence_s, self.no_speech_s, self.max_s, self.min_rms = silence_s, no_speech_s, max_s, min_rms
-        self.noise, self.speaking = min_rms / 3, False
+        self.noise, self.speaking, self.vad = min_rms / 3, False, vad
         self.t = self.speech_t = self.silent_t = 0.0
         self.loud_run = 0
 
     def feed(self, block: np.ndarray) -> Optional[str]:
         rms = float(np.sqrt(np.mean(block ** 2)))
-        loud = rms > max(self.min_rms, self.noise * 3)
+        if self.vad:  # hysteresis: harder to start (0.5) than to keep going (0.35)
+            loud = self.vad(block) > (0.35 if self.speaking else 0.5)
+        else:
+            loud = rms > max(self.min_rms, self.noise * 3)
         if not self.speaking:
             self.t += BLOCK_S
             self.loud_run = self.loud_run + 1 if loud else 0
@@ -109,46 +148,131 @@ class LazyWhisper:
         return " ".join(s.text.strip() for s in segments)
 
 
-def preload_laya(cfg: dict) -> Callable[[str, dict], dict]:
-    """Load Laya while the user is still speaking, so the decision is instant at the end."""
-    import laya
+def preload_intent(cfg: dict) -> Callable[[str, dict], dict]:
+    """Load the intent model while the user is still speaking, so the decision is instant at the end."""
+    import intent
 
-    lc = cfg["laya"]
-    scorer = laya.LayaScorer(o.HERE / lc["model_dir"], lc["threads"])
-    threading.Thread(target=scorer._load, daemon=True).start()
-    return lambda text, c: o.laya_decide(text, c, scorer)
+    ic = cfg["intent"]
+    matcher = intent.Matcher(cfg["presets"], intent.E5(threads=ic["threads"]), min_score=ic["min_score"], margin=ic["margin"])
+    threading.Thread(target=matcher.scores, args=("",), daemon=True).start()
+    return lambda text, c: o.intent_decide(text, c, matcher)
 
 
-def session(ui: overlay.Overlay, cfg: dict, blocks: Optional[Iterator[np.ndarray]] = None) -> None:
+def speaker(cfg: dict) -> Optional[tts.Speaker]:
     v = cfg["voice"]
+    return tts.Speaker(v["language"], v.get("speed", 1.0)) if v.get("tts", True) and tts.available() else None
+
+
+def session(ui: overlay.Overlay, cfg: dict, blocks: Optional[Iterator[np.ndarray]] = None,
+            models: Optional[Callable[[], tuple]] = None, cancel: Optional[threading.Event] = None,
+            typed: bool = False, detach: Optional[Callable[[], None]] = None,
+            notify: Optional[Callable[[str, str], None]] = None) -> None:
+    """models() -> (stt, decide[, speaker]) lets the daemon keep them loaded. Closing the overlay or cancel stops
+    everything, including the voice. typed: a text box instead of the mic. detach(): called when a long task moves to
+    the corner pill, so the daemon can start another session; notify(title, text) when it finishes there."""
+    v, cancel = cfg["voice"], cancel or threading.Event()
     try:
-        ui.status("OUVINDO", overlay.LISTEN)
-        stt, decide = LazyWhisper(v["model"], v["language"]), preload_laya(cfg)
-        seg = Segmenter(v["silence_s"], v["no_speech_timeout_s"], v["max_s"], v["min_rms"])
+        ui.status("Escreva" if typed else "Ouvindo", overlay.LISTEN)
+        sound = v.get("earcons", True)
+        if not typed:
+            earcons.play("listen", sound)
+        stt, decide, *extra = models() if models else (LazyWhisper(v["model"], v["language"]), preload_intent(cfg),
+                                                        speaker(cfg))
+        voice = extra[0] if extra else None
+        def segmenter() -> Segmenter:  # one per utterance: its noise floor and the VAD state start fresh
+            return Segmenter(v["silence_s"], v["no_speech_timeout_s"], v["max_s"], v["min_rms"],
+                             vad=SileroVAD() if v.get("vad", "silero") == "silero" else None)
         stop = threading.Event()
-        threading.Thread(target=lambda: (ui.closed.wait(), stop.set()), daemon=True).start()
-        text = listen(blocks or mic_blocks(stop), seg, stt, ui.text, v["partial_every_s"])
+
+        def watch():
+            while not (ui.closed.wait(0.1) or cancel.is_set()):
+                pass
+            stop.set()
+            cancel.set()  # also kills the AI and its child processes
+            ui.close()
+        threading.Thread(target=watch, daemon=True).start()
+        if typed:
+            text = ui.prompt("O que você precisa?")
+            if not text:
+                return ui.close()
+        else:
+            text = listen(blocks or mic_blocks(stop), segmenter(), stt, ui.text, v["partial_every_s"])
         if not text:
-            ui.status("NADA OUVIDO", overlay.IDLE)
+            ui.status("Nada ouvido", overlay.IDLE)
+            earcons.play("error", sound)
             ui.text("Não ouvi nada.", overlay.IDLE)
             return ui.hold(1.5)
-        ui.status("DECIDINDO", overlay.IDLE)
+        ui.status("Pensando", overlay.IDLE)
+        earcons.play("heard", sound)
         ui.text(text)
 
         def confirm(question: str) -> bool:
             ok = ui.ask(question)
             if ok:
-                ui.status("TRABALHANDO", overlay.IDLE)
+                ui.status("Trabalhando", overlay.IDLE)
             return ok
 
-        out = o.handle(text, cfg, decide=decide, confirm=confirm,
-                       pick=lambda q, opts: ui.choose(q, opts))
-        ui.status("PRONTO", overlay.GREEN)
-        out = out.strip()[:600]
-        ui.text(out or "Feito.")
-        ui.hold(min(20.0, max(3.0, 2 + len(out) / 18)))
+        def hear(prompt: str) -> Optional[str]:  # one more answer, for the number grid
+            if typed:
+                return ui.prompt(prompt)
+            ui.status(prompt, overlay.LISTEN)
+            earcons.play("listen", sound)
+            return listen(blocks or mic_blocks(stop), segmenter(), stt, ui.text, v["partial_every_s"])
+
+        if (cmd := access.parse(text)):  # voice accessibility: no AI unless nothing matches, never in the background
+            desk = access.Desk(ui.gui, ui.win) if sys.platform == "win32" else None
+            out = access.run(cmd, cfg, desk, hear, confirm, lambda q, opts: ui.choose(q, opts), cancel)
+            ui.status("Pronto", overlay.GREEN)
+            earcons.play("done", sound)
+            ui.text(out)
+            return ui.hold(3)
+        streamed = []
+
+        def on_event(e) -> None:  # the answer appears as the AI writes it; tool use shows in the tag
+            if voice and not streamed:
+                voice.warm()  # load the voice while the AI is still answering
+            if e.kind == "tool":
+                ui.status(e.text[:40], overlay.IDLE)
+            else:
+                streamed.append(e.text)
+                ui.text("".join(streamed))
+
+        working, moved = threading.Event(), threading.Event()
+
+        def background() -> None:  # a long task moves to the corner pill so the PC (and the hotkey) is free again
+            if not working.wait(cfg["ui"].get("background_after_s", 12)) and not cancel.is_set():
+                moved.set()
+                detach()
+                ui.to_corner()
+        if detach:
+            threading.Thread(target=background, daemon=True).start()
+        try:
+            out = o.handle(text, cfg, decide=decide, confirm=confirm,
+                           pick=lambda q, opts: ui.choose(q, opts), on_event=on_event, cancel=cancel).strip() or "Feito."
+        finally:
+            working.set()
+        HISTORY.append((text, out))
+        if moved.is_set():  # finished in the background: the pill says so, a click opens the answer
+            ui.status("Pronto", overlay.GREEN)
+            earcons.play("done", sound)
+            ui.text(out)
+            if notify and cfg["ui"].get("notify", True):
+                notify("Tarefa pronta", out[:200])
+            return ui.hold(None)
+        ui.status("Pronto", overlay.GREEN)
+        earcons.play("done", sound)
+        ui.text(out)
+        if voice and streamed:  # only the AI's answers are spoken, not preset results
+            try:
+                voice.say(out, cancel)
+            except Exception:  # noqa: BLE001 - a broken voice must not replace a good answer with an error
+                pass
+            finally:
+                voice.release()  # warm() loads it again while the AI writes the next answer
+        ui.hold(4 if len(out) <= SHORT else None)
     except Exception as e:  # never leave the overlay stuck on screen
-        ui.status("ERRO", overlay.RED)
+        ui.status("Erro", overlay.RED)
+        earcons.play("error", cfg.get("voice", {}).get("earcons", True))
         ui.text(f"{type(e).__name__}: {e}"[:300], overlay.RED)
         ui.hold(5)
 

@@ -2,11 +2,11 @@
 
 Press a key, speak, and a small local model decides what to do.
 
-1. **Voice**: hotkey → live transcription in a dark, cyberpunk-style overlay (faster-whisper, local).
-2. **Decision**: [Laya](https://huggingface.co/leli14/laya_cpu_onnx) (ONNX choice classifier, CPU) votes over shuffled option orders until it reaches a confident majority.
-3. **Action**: an allowlisted *preset* runs locally (open browser, lock screen, launch a Steam game…). Anything complex or ambiguous is escalated to **Claude Code** (`claude -p`) after you confirm.
-4. **Solution picker**: if Claude Code finds several distinct solutions it asks you to pick one (keys 1-9), then continues.
-5. **Dev overlay**: Claude Code hooks show live progress ("Editando app.py") in a screen corner.
+1. **Voice**: hotkey or "Hey Jarvis" → live transcription in a light pill at the top of the screen (faster-whisper, local). It follows the system theme, high contrast and "show animations" settings; questions come with buttons (Enter/Esc/1-9 work too).
+2. **Decision**: a local intent matcher ([multilingual-e5-small](https://huggingface.co/intfloat/multilingual-e5-small), int8 ONNX, ~190 MB RAM, ~5 ms per decision) compares what you said with example phrases of each preset. Questions, "stop/close" verbs, low scores and near-ties never run a preset: they go to the AI or ask you to pick.
+3. **Action**: an allowlisted *preset* runs locally (open browser, lock screen, launch a Steam game…). Anything else goes to **your own AI**, no API key: Claude Code, Codex or a local Ollama model (`brain.use`, default `auto` = first one installed). Short questions get a fast answer (Haiku on Claude); tasks that read files ask first. Answers stream in, and the AI remembers the conversation for 10 minutes (`brain.memory_idle_s`, RAM only).
+4. **Solution picker**: if the AI finds several distinct solutions it shows one button per solution (or keys 1-9), then continues.
+5. **Live Activity**: Claude Code hooks show live progress ("Editando app.py") in a small pill in a screen corner.
 
 Windows and Linux (Hyprland). The Linux scripts are untested on real hardware.
 
@@ -14,26 +14,72 @@ Windows and Linux (Hyprland). The Linux scripts are untested on real hardware.
 
 ```bash
 pip install -r requirements.txt
-# Laya model (~1.2 GB): download model_quantized.onnx and tokenizer.json into models/laya/
-huggingface-cli download leli14/laya_cpu_onnx model_quantized.onnx tokenizer.json --local-dir models/laya
+python onboarding.py            # checks the AI and the mic, downloads the models (also opens on the agent's first run)
+python intent.py               # or just the intent model (~125 MB, pinned and sha256-checked) into models/e5/
 python game_indexer.py          # optional: index Steam games into games.json
 python listen.py                # speak; silence ends the session
 python orchestrator.py "abre o navegador" --dry-run   # text mode
 ```
 
-Hyprland: `bind = SUPER, V, exec, ~/.config/local-ai-agent/voice_trigger.sh`
-Windows: `python hotkey_windows.py` (Win+F12, easy to bind to a mouse button; Win+V is reserved by Windows)
+Hyprland: `bind = SUPER, V, exec, ~/.config/local-ai-agent/voice_trigger.sh` (talk) and `text_trigger.sh` (type)
+Windows: `python hotkey_windows.py`: Win+F12 talks, Win+F11 opens a text box (easy to bind to mouse buttons; Win+V is
+reserved by Windows). The tray icon has the same actions, plus Settings.
+
+A task that takes longer than `ui.background_after_s` (12 s) shrinks into a pill in the corner, so you can keep
+working and even start another request. When it ends the pill turns green, a notification says so (`ui.notify`), and
+a click opens the answer. Tray > "Cancelar tarefas em segundo plano" stops them.
+
+The hotkey talks to a resident agent (`agentd.py`), started on the first press. Press again to cancel (mic, AI and its
+child processes). `daemon.mode` in the config: `leve` (default) frees the speech and intent models after
+`unload_after_s` idle, about 53 MB before first use, ~400 MB while listening, ~145 MB after unloading; `rapido` keeps them
+loaded for instant start. The conversation memory survives either way. `python agentd.py --quit` stops it.
+
+## Voice
+
+- Speech detection: Silero VAD (bundled with faster-whisper), so fans, music and clicks do not count as speech.
+- Transcription: Whisper `small` (`voice.model`; `base` is lighter and less accurate).
+- Short chimes when it starts listening, hears you, finishes or fails (`voice.earcons`).
+- Spoken answers (optional): `pip install kokoro-onnx==0.6.1` then `python tts.py` (downloads ~340 MB, sha256-checked).
+  Voices for pt, en, es, fr, it, hi, ja, zh follow `voice.language`. Only AI answers are spoken, up to ~400 characters;
+  the hotkey or Esc cuts it. Uses ~430 MB while loaded; `leve` mode frees it when idle. Its phonemizer and espeak-ng
+  are GPL-3 (installed by you, not shipped here).
+
+## Wake word
+
+`python wake.py` downloads three small models (~3.5 MB, sha256-checked); from then on the agent wakes when you say
+**"Hey Jarvis"**, no key needed. Your own phrase: `python wake.py --record "ola computador"` (say it 3 times), then set
+`"wake": {"phrase": "ola computador"}` in `config.json`. Turn it off with `"wake": {"enabled": false}`.
+
+The mic stays open while the agent waits, but audio is processed locally in 80 ms pieces and never stored or sent.
+It closes while a session runs. Idle cost measured: ~90 MB, ~4% of one CPU core. The "hey jarvis" model is
+openWakeWord's (CC BY-NC-SA 4.0: personal, non-commercial use); your own phrase uses only the Apache-2.0 parts.
 
 ## Screen reading
 
 Monitors are numbered: **1 = primary**, the rest left to right (`python monitors.py` lists them). Ask by voice:
 "o que tem no monitor 2" (local OCR via RapidOCR, sends text) or "olha o monitor 2" (sends the image). Nothing is captured
 unless you ask. You always confirm first; the confirmation shows the text that would leave your PC. Screen content is
-passed to Claude Code as untrusted data (read-only tools, image saved only to a private temp folder and deleted).
+passed to the AI as untrusted data (read-only tools, image saved only to a private temp folder and deleted).
+
+## Click by voice (Windows)
+
+- "clica em Salvar", "clique duplo em Documentos", "clique com o botão direito em Lixeira": finds the control by its
+  name in the window you are using (UI Automation) and clicks it. Several matches: it asks which one.
+- Nothing matches: it offers to send an image of **that window only** to Claude Code, shows a ring where the
+  AI points and asks "Clicar aqui?" before clicking. With Codex or Ollama it suggests the grid instead.
+- "mostrar grade": numbers 1-9 over the screen. Say a number to zoom into it, "clica" / "duplo" / "direito" to click
+  its centre, "clica no 5" to click a cell at once, "cancela" to close. Works with the text box too (Win+F11).
+- Admin windows are refused (Windows would silently drop the click), and nothing is clicked if the window moved or
+  changed in the meantime.
+
+## Config
+
+One file: defaults live in `config.default.json`; put only what you change in `config.json` (git-ignored), e.g.
+`{"brain": {"use": "ollama"}, "voice": {"model": "small"}, "daemon": {"mode": "rapido"}}`. Your own presets go there too.
 
 ## Appearance
 
-`python settings.py` opens a live-preview window: size, font, colors, max width, and you can **drag** the two overlays (main and corner) to position them. Saved to `config.json` (git-ignored).
+`python settings.py` opens the settings (General, Voice, Appearance): the AI to use, memory mode, language, spoken answers, wake word, theme, accent colour, text size and where the windows appear. Every change is saved at once to `config.json` (git-ignored). The UI is Qt (`PySide6-Essentials`, LGPL).
 
 ## Dev overlay (Claude Code hooks)
 
@@ -43,17 +89,16 @@ Merge [claude-hooks.example.json](claude-hooks.example.json) into your Claude Co
 
 - Presets are argv lists, run without a shell. Shells are rejected in proposals.
 - Claude may *propose* presets; they are queued in `presets.pending.json` and only active after `python orchestrator.py --approve`.
-- Escalation sends the task on stdin, read-only tools by default (`Read, Grep, Glob`), and always asks first (`--yes` does not cover it; `--yes-escalate` does).
+- The AI gets the request on stdin, runs read-only (Claude: `--restricted`, tools `Read, Grep, Glob`, your hooks and settings not loaded; Codex: `--sandbox read-only`; Ollama: localhost only) inside its own empty folder (`brain.workdir`, default `~/.local-ai-agent/work`).
+- Tasks always ask first (`--yes` does not cover them; `--yes-escalate` does). Quick questions go straight unless `brain.confirm_quick` is true.
+- Cancel kills the AI's whole process tree; `brain.timeout_s` caps a run.
 - The log stores metadata only (action, preset, input length).
-- Unsure decisions escalate or ask; the model never guesses a preset.
+- Unsure decisions escalate or ask; the model never guesses a preset. Presets that ask for confirmation repeat what was heard.
+- Add `examples` (a few phrasings) to each preset for better matching.
 
 ## Tests
 
 ```bash
 python -m pytest -q
-python eval_laya.py   # labelled phrases; rerun after adding presets
+python eval_intent.py # labelled phrases incl. stop verbs and misheard speech; must show 0 wrong presets
 ```
-
-## Notes
-
-`assets/logo_src.jpg` is the author's own mark; replace it with yours if you fork. Josefin Sans is under the SIL OFL (`fonts/OFL.txt`).

@@ -1,129 +1,274 @@
-"""Appearance settings with live preview. Drag the two preview windows to place them. Run: python settings.py"""
-import copy
-import tkinter as tk
-import tkinter.font as tkfont
-from tkinter import colorchooser, ttk
+"""Settings, laid out like macOS System Settings: a sidebar of sections, each a page of grouped rows.
+Every change is saved at once to config.json (git-ignored). Run: python settings.py
+"""
+import sys
+from typing import Callable
+
+from PySide6.QtCore import QRectF, QSize, Qt
+from PySide6.QtGui import QColor, QPainter
+from PySide6.QtWidgets import (QAbstractButton, QButtonGroup, QComboBox, QFrame, QHBoxLayout, QLabel, QListWidget,
+                               QPushButton, QSlider, QStackedWidget, QVBoxLayout, QWidget)
 
 import config
 import overlay
 
-BG, FG, MUTED, FIELD = "#0f1115", "#e8f1ee", "#8b93a1", "#1a1e25"
-SLIDERS = [  # (label, key, min, max)
-    ("Fonte: tamanho máximo", "size_max", 20, 120), ("Fonte: tamanho mínimo", "size_min", 10, 60),
-    ("Largura mínima", "min_width", 200, 900), ("Largura máxima (% da tela)", "max_width_pct", 20, 95),
-    ("Raio da borda", "radius", 0, 60), ("Margem interna", "pad", 8, 80), ("Símbolo (px)", "logo_px", 16, 140),
-]
-COLORS = [("Fundo", "bg"), ("Texto", "fg"), ("Dica", "hint"), ("Pensando", "idle"), ("Destaque", "accent"), ("Erro", "error")]
+LANGUAGES = {"pt": "Português", "en": "English", "es": "Español", "fr": "Français", "it": "Italiano",
+             "hi": "हिन्दी", "ja": "日本語", "zh": "中文"}
+BRAINS = {"auto": "Automático (o que estiver instalado)", "claude": "Claude Code", "codex": "Codex",
+          "ollama": "Ollama (só local)"}
+THEMES = {"auto": "Automático", "light": "Claro", "dark": "Escuro"}
+POSITIONS = {"Topo": ("n", 50, 4), "Centro": ("c", 50, 45), "Base": ("s", 50, 96)}
+CORNERS = {"Inferior direito": ("se", 99, 98), "Inferior esquerdo": ("sw", 1, 98),
+           "Superior direito": ("ne", 99, 2), "Superior esquerdo": ("nw", 1, 2)}
 SAMPLES = {"main": "abre o navegador e procura receitas", "corner": "Editando orchestrator.py"}
 
 
-class Settings:
+class Switch(QAbstractButton):
+    """On/off switch (a checkable button, so keyboard Space and screen readers work as for a checkbox)."""
+
+    def __init__(self, accent: str):
+        super().__init__()
+        self.accent = accent
+        self.setCheckable(True)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+
+    def sizeHint(self) -> QSize:
+        return QSize(40, 24)
+
+    def paintEvent(self, _e) -> None:
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        r = QRectF(1, 1, 38, 22)
+        p.setPen(QColor(self.accent) if self.hasFocus() else Qt.PenStyle.NoPen)
+        p.setBrush(QColor(self.accent) if self.isChecked() else QColor(120, 120, 128, 80))
+        p.drawRoundedRect(r, 11, 11)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QColor("white"))
+        p.drawEllipse(QRectF(19 if self.isChecked() else 3, 3, 18, 18))
+
+
+def style(p: dict) -> str:
+    window = "#ececec" if p["fg"] == "#1d1d1f" else "#1e1e1e"
+    group = "#ffffff" if p["fg"] == "#1d1d1f" else "#2a2a2c"
+    line = "rgba(%d,%d,%d,%d)" % p["line"]
+    return f"""
+        QWidget {{ background: {window}; color: {p['fg']}; font-size: 13px; }}
+        QListWidget {{ border: none; padding: 8px; outline: none; }}
+        QListWidget::item {{ padding: 7px 10px; border-radius: 6px; }}
+        QListWidget::item:selected {{ background: {p['accent']}; color: white; }}
+        QLabel#title {{ font-size: 22px; font-weight: 600; }}
+        QLabel#note {{ color: {p['muted']}; font-size: 12px; }}
+        QFrame#group {{ background: {group}; border: 1px solid {line}; border-radius: 10px; }}
+        QFrame#group QWidget {{ background: transparent; }}
+        QFrame#group QFrame#sep {{ background: {line}; max-height: 1px; border: none; }}
+        QComboBox {{ background: {group}; border: 1px solid {line}; border-radius: 6px; padding: 3px 8px;
+                     min-width: 170px; }}
+        QPushButton {{ background: {group}; border: 1px solid {line}; border-radius: 6px; padding: 5px 14px; }}
+        QPushButton:focus, QComboBox:focus {{ border: 2px solid {p['accent']}; }}
+        QPushButton#swatch {{ border-radius: 11px; min-width: 22px; max-width: 22px; min-height: 22px;
+                              max-height: 22px; padding: 0; }}
+        QSlider::groove:horizontal {{ height: 4px; background: {line}; border-radius: 2px; }}
+        QSlider::sub-page:horizontal {{ background: {p['accent']}; border-radius: 2px; }}
+        QSlider::handle:horizontal {{ background: white; border: 1px solid rgba(0,0,0,60); width: 18px; height: 18px;
+                                      margin: -8px 0; border-radius: 9px; }}
+    """
+
+
+def group(rows: list[tuple[str, QWidget]]) -> QFrame:
+    box = QFrame()
+    box.setObjectName("group")
+    col = QVBoxLayout(box)
+    col.setContentsMargins(14, 4, 14, 4)
+    col.setSpacing(0)
+    for i, (label, control) in enumerate(rows):
+        if i:
+            sep = QFrame()
+            sep.setObjectName("sep")
+            col.addWidget(sep)
+        line = QHBoxLayout()
+        line.setContentsMargins(0, 8, 0, 8)
+        name = QLabel(label)
+        name.setBuddy(control)
+        control.setAccessibleName(label)
+        line.addWidget(name, 1)
+        line.addWidget(control)
+        col.addLayout(line)
+    return box
+
+
+def note(text: str) -> QLabel:
+    n = QLabel(text)
+    n.setObjectName("note")
+    n.setWordWrap(True)
+    return n
+
+
+class Settings(QWidget):
     def __init__(self):
-        overlay.load_bundled_fonts()
-        self.ui = config.load()["ui"]
-        self.root = r = tk.Tk()
-        r.title("Local AI Agent · Aparência")
-        r.option_add("*Font", ("Segoe UI", 12))
-        r.configure(bg=BG, padx=20, pady=16)
-        r.geometry("+60+60")
-        self.kind = tk.StringVar(value="main")
-        self.previews = {k: self._preview(k) for k in ("main", "corner")}
-        self.pos = tk.StringVar()
-        self._build()
-        self._sync()
+        overlay.app()
+        super().__init__()
+        self.cfg = config.load()
+        self.setWindowTitle("Ajustes do Assistente")
+        self.resize(720, 520)
+        self.side = QListWidget()
+        self.side.setFixedWidth(190)
+        self.side.setAccessibleName("Seções")
+        self.pages = QStackedWidget()
+        row = QHBoxLayout(self)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.addWidget(self.side)
+        row.addWidget(self.pages, 1)
+        for name, build in (("Geral", self._general), ("Voz", self._voice), ("Aparência", self._look)):
+            self.side.addItem(name)
+            self.pages.addWidget(self._page(name, build()))
+        self.side.currentRowChanged.connect(self.pages.setCurrentIndex)
+        self.side.setCurrentRow(0)
+        self._restyle()
 
-    def _preview(self, kind: str) -> overlay.Overlay:
-        ov = overlay.Overlay(self.ui, kind, master=self.root)
-        ov.edit, ov.on_move = True, lambda *_: self._sync()
-        ov.status("", overlay.LISTEN)
-        ov.text(SAMPLES[kind])
-        return ov
+    # ---- building blocks ----
+    def _page(self, title: str, parts: list) -> QWidget:
+        page, col = QWidget(), QVBoxLayout()
+        page.setLayout(col)
+        col.setContentsMargins(28, 22, 28, 22)
+        col.setSpacing(10)
+        head = QLabel(title)
+        head.setObjectName("title")
+        col.addWidget(head)
+        for part in parts:
+            col.addWidget(part)
+        col.addStretch()
+        return page
 
-    def _label(self, parent, text, **kw):
-        return tk.Label(parent, text=text, bg=BG, fg=kw.pop("fg", FG), anchor="w", **kw)
+    def _combo(self, options: dict, current: str, on: Callable[[str], None]) -> QComboBox:
+        box = QComboBox()
+        for key, label in options.items():
+            box.addItem(label, key)
+        box.setCurrentIndex(max(0, box.findData(current)))
+        box.currentIndexChanged.connect(lambda _i: on(box.currentData()))
+        return box
 
-    def _build(self) -> None:
-        r = self.root
-        self._label(r, "Janela a ajustar", fg=MUTED).pack(fill="x")
-        row = tk.Frame(r, bg=BG)
-        row.pack(fill="x", pady=(2, 10))
-        for text, kind in (("Principal (fala)", "main"), ("Canto (progresso)", "corner")):
-            tk.Radiobutton(row, text=text, value=kind, variable=self.kind, command=self._sync, bg=BG, fg=FG,
-                           selectcolor=FIELD, activebackground=BG, activeforeground=FG).pack(side="left", padx=(0, 14))
-        self.scales = {}
-        for label, key, lo, hi in SLIDERS:
-            self._label(r, label, fg=MUTED).pack(fill="x")
-            s = tk.Scale(r, from_=lo, to=hi, orient="horizontal", bg=BG, fg=FG, troughcolor=FIELD, highlightthickness=0,
-                         command=lambda v, k=key: self._set(k, int(float(v))))
-            s.pack(fill="x", pady=(0, 6))
-            self.scales[key] = s
-        self._label(r, "Fonte", fg=MUTED).pack(fill="x")
-        families = ["(automática)"] + sorted({f for f in tkfont.families(r) if not f.startswith("@")})
-        self.font_box = ttk.Combobox(r, values=families, state="readonly")
-        self.font_box.pack(fill="x", pady=(0, 10))
-        self.font_box.bind("<<ComboboxSelected>>", self._font)
-        self._label(r, "Cores", fg=MUTED).pack(fill="x")
-        grid = tk.Frame(r, bg=BG)
-        grid.pack(fill="x", pady=(2, 10))
-        self.swatches = {}
-        for i, (text, key) in enumerate(COLORS):
-            b = tk.Button(grid, text=text, command=lambda k=key: self._color(k), relief="flat", bd=0, padx=10, pady=6)
-            b.grid(row=i // 3, column=i % 3, padx=3, pady=3, sticky="ew")
-            grid.columnconfigure(i % 3, weight=1)
-            self.swatches[key] = b
-        self._label(r, "", textvariable=self.pos, fg=MUTED).pack(fill="x")
-        self._label(r, "Arraste as janelas de pré-visualização para posicioná-las.", fg=MUTED).pack(fill="x", pady=(0, 10))
-        bar = tk.Frame(r, bg=BG)
-        bar.pack(fill="x")
-        for text, cmd in (("Salvar", self._save), ("Restaurar padrão", self._reset), ("Fechar", r.destroy)):
-            tk.Button(bar, text=text, command=cmd, bg=FIELD, fg=FG, relief="flat", bd=0, padx=14, pady=8,
-                      activebackground="#262b33", activeforeground=FG).pack(side="left", padx=(0, 8))
+    def _check(self, value: bool, on: Callable[[bool], None]) -> Switch:
+        box = Switch(overlay.palette(self.cfg["ui"])["accent"])
+        box.setChecked(value)
+        box.toggled.connect(on)
+        return box
 
-    def _redraw(self) -> None:
-        for ov in self.previews.values():
-            ov.apply(self.ui)
+    def _slider(self, lo: int, hi: int, value: float, on: Callable[[float], None]) -> QWidget:
+        holder, line = QWidget(), QHBoxLayout()
+        holder.setLayout(line)
+        line.setContentsMargins(0, 0, 0, 0)
+        s, shown = QSlider(Qt.Orientation.Horizontal), QLabel()
+        s.setRange(lo, hi)
+        s.setValue(round(value * 100))
+        s.setFixedWidth(170)
+        shown.setFixedWidth(42)
+        shown.setText(f"{s.value()}%")
+        s.valueChanged.connect(lambda v: (shown.setText(f"{v}%"), on(v / 100)))
+        line.addWidget(s)
+        line.addWidget(shown)
+        return holder
 
-    def _set(self, key: str, value: int) -> None:
-        if self.ui[self.kind.get()].get(key) != value:
-            self.ui[self.kind.get()][key] = value
-            self._redraw()
+    def _save(self, section: str, key: str, value) -> None:
+        self.cfg[section][key] = value
+        config.save({section: {key: value}})
 
-    def _font(self, _e=None) -> None:
-        self.ui["font"] = "" if self.font_box.get() == "(automática)" else self.font_box.get()
-        self._redraw()
+    # ---- pages ----
+    def _general(self) -> list:
+        b, d = self.cfg["brain"], self.cfg["daemon"]
+        return [
+            group([
+                ("Inteligência", self._combo(BRAINS, b["use"], lambda v: self._save("brain", "use", v))),
+                ("Memória", self._combo({"leve": "Leve (libera após 5 min parado)", "rapido": "Rápida (sempre pronta)"},
+                                        d.get("mode", "leve"), lambda v: self._save("daemon", "mode", v))),
+                ("Avisar quando uma tarefa longa terminar", self._check(self.cfg["ui"].get("notify", True),
+                                                                        lambda v: self._save("ui", "notify", v))),
+            ]),
+            note("Nenhuma chave de API: o assistente usa o login que você já tem no Claude Code ou Codex, "
+                       "ou um modelo Ollama no seu PC. Memória vale depois de reiniciar o assistente."),
+        ]
 
-    def _color(self, key: str) -> None:
-        picked = colorchooser.askcolor(self.ui["colors"][key], parent=self.root)[1]
-        if picked:
-            self.ui["colors"][key] = picked
-            self._redraw()
-            self._sync()
+    def _voice(self) -> list:
+        v, w = self.cfg["voice"], self.cfg["wake"]
+        return [
+            group([
+                ("Idioma", self._combo(LANGUAGES, v["language"], lambda x: self._save("voice", "language", x))),
+                ("Falar as respostas", self._check(v.get("tts", True), lambda x: self._save("voice", "tts", x))),
+                ("Velocidade da fala", self._slider(70, 140, v.get("speed", 1.0),
+                                                    lambda x: self._save("voice", "speed", round(x, 2)))),
+                ("Sons de aviso", self._check(v.get("earcons", True), lambda x: self._save("voice", "earcons", x))),
+            ]),
+            group([
+                (f"Ativar dizendo “{w['phrase']}”", self._check(w["enabled"],
+                                                                 lambda x: self._save("wake", "enabled", x))),
+            ]),
+            note('Outra frase: python wake.py --record "sua frase". Voz e ativação valem depois de reiniciar '
+                       "o assistente. O áudio nunca sai do PC."),
+        ]
 
-    def _sync(self) -> None:
-        """Push the selected window's values into the widgets."""
-        kind = self.kind.get()
-        for key, s in self.scales.items():
-            s.set(self.ui[kind][key])
-        self.font_box.set(self.ui["font"] or "(automática)")
-        for key, b in self.swatches.items():
-            c = self.ui["colors"][key]
-            b.configure(bg=c, fg="#000000" if sum(int(c[i:i + 2], 16) for i in (1, 3, 5)) > 380 else "#ffffff",
-                        activebackground=c)
-        self.pos.set("   ".join(f"{k}: x {self.ui[k]['x_pct']}%  y {self.ui[k]['y_pct']}%" for k in ("main", "corner")))
+    def _look(self) -> list:
+        ui = self.cfg["ui"]
+        swatches, group = QWidget(), QButtonGroup(self)
+        line = QHBoxLayout(swatches)
+        line.setContentsMargins(0, 0, 0, 0)
+        for name, (light, _dark) in overlay.ACCENTS.items():
+            b = QPushButton()
+            b.setObjectName("swatch")
+            b.setCheckable(True)
+            b.setChecked(name == ui.get("accent", "blue"))
+            b.setAccessibleName(name)
+            b.setToolTip(name)
+            b.setStyleSheet(f"QPushButton#swatch {{ background: {light}; }} "
+                            "QPushButton#swatch:checked { border: 3px solid rgba(128,128,128,0.6); }")
+            b.clicked.connect(lambda _=False, n=name: self._look_set("accent", n))
+            group.addButton(b)
+            line.addWidget(b)
+        where = next((k for k, v in POSITIONS.items() if v[0] == ui["main"]["anchor"]), "Topo")
+        corner = next((k for k, v in CORNERS.items() if v[0] == ui["corner"]["anchor"]), "Inferior direito")
+        preview = QPushButton("Mostrar exemplo")
+        preview.clicked.connect(self._preview)
+        return [
+            group([
+                ("Tema", self._combo(THEMES, ui.get("theme", "auto"), lambda x: self._look_set("theme", x))),
+                ("Cor de destaque", swatches),
+                ("Tamanho do texto", self._slider(80, 160, ui.get("text_scale", 1.0),
+                                                  lambda x: self._look_set("text_scale", round(x, 2)))),
+            ]),
+            group([
+                ("Janela principal", self._combo({k: k for k in POSITIONS}, where,
+                                                 lambda x: self._place("main", POSITIONS[x]))),
+                ("Atividade em andamento", self._combo({k: k for k in CORNERS}, corner,
+                                                       lambda x: self._place("corner", CORNERS[x]))),
+                ("", preview),
+            ]),
+            note("Respeita o modo de alto contraste e a opção “Mostrar animações” do sistema."),
+        ]
 
-    def _save(self) -> None:
-        config.save({"ui": self.ui})
-        self.pos.set("Salvo em config.json")
+    def _look_set(self, key: str, value) -> None:
+        self._save("ui", key, value)
+        self._restyle()
 
-    def _reset(self) -> None:
-        self.ui = copy.deepcopy(config.load(user=config.HERE / "does-not-exist.json")["ui"])
-        for ov in self.previews.values():
-            ov.apply(self.ui)
-        self._sync()
+    def _place(self, kind: str, spot: tuple) -> None:
+        anchor, x, y = spot
+        self.cfg["ui"][kind].update(anchor=anchor, x_pct=x, y_pct=y)
+        config.save({"ui": {kind: {"anchor": anchor, "x_pct": x, "y_pct": y}}})
+        self._preview()
 
-    def run(self) -> None:
-        self.root.mainloop()
+    def _preview(self) -> None:
+        import threading
+        for kind in ("main", "corner"):
+            ov = overlay.Overlay(self.cfg["ui"], kind)
+            ov.status("Ouvindo" if kind == "main" else "", overlay.LISTEN)
+            ov.text(SAMPLES[kind])
+            threading.Thread(target=ov.hold, args=(3,), daemon=True).start()
+
+    def _restyle(self) -> None:
+        self.setStyleSheet(style(overlay.palette(self.cfg["ui"])))
 
 
 if __name__ == "__main__":
-    Settings().run()
+    app = overlay.app()
+    app.setStyle("Fusion")
+    s = Settings()
+    s.show()
+    sys.exit(app.exec())
