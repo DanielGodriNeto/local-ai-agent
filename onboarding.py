@@ -29,15 +29,6 @@ def mic_status() -> str:
         return "Nenhum microfone encontrado"
 
 
-def whisper_ready(model: str) -> bool:
-    from faster_whisper.utils import download_model
-    try:
-        download_model(model, local_files_only=True)
-        return True
-    except Exception:  # noqa: BLE001 - not in the cache yet
-        return False
-
-
 def models(cfg: dict) -> list[tuple[str, Callable[[], bool], Optional[Callable[[], None]], str]]:
     """(name, ready?, download or None, note when it cannot be downloaded here)."""
     import intent
@@ -55,12 +46,11 @@ def models(cfg: dict) -> list[tuple[str, Callable[[], bool], Optional[Callable[[
     def files(d, f):
         return lambda: all((d / name).exists() for name in f)
 
-    def whisper_fetch():
-        from faster_whisper.utils import download_model
-        download_model(v["model"])
+    import listen
     return [
         ("Entender comandos · 120 MB", files(intent.MODEL_DIR, intent.MODEL_FILES), intent.fetch_model, ""),
-        (f"Transcrição de voz · {v['model']}", lambda: whisper_ready(v["model"]), whisper_fetch, ""),
+        (f"Transcrição de voz · {v['model']}", lambda: listen.whisper_ready(v["model"]),
+         lambda: listen.whisper_path(v["model"]), ""),
         ("Palavra de ativação · 4 MB", files(wake.MODEL_DIR, wake.MODEL_FILES),
          lambda: intent.fetch_model(wake.MODEL_DIR, wake.MODEL_FILES), ""),
         ("Voz falada · 340 MB · opcional", tts.available,
@@ -89,8 +79,7 @@ class Onboarding(QWidget):
                                       ("Microfone", QLabel(mic_status()))]))
         col.addWidget(settings.group([(name, self._model_row(ready, fetch, hint))
                                       for name, ready, fetch, hint in models(self.cfg)]))
-        col.addWidget(settings.note("Comandos, ativação e voz vêm de versões fixas, conferidas por sha256. A transcrição vem do "
-                                    "Hugging Face (faster-whisper)."))
+        col.addWidget(settings.note("Todos os modelos vêm de versões fixas, conferidas por sha256."))
         col.addStretch()
         bar = QHBoxLayout()
         bar.addStretch()

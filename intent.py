@@ -142,13 +142,17 @@ def fetch_model(model_dir: Path = MODEL_DIR, files: Optional[dict] = None) -> No
     import hashlib
     import urllib.request
 
+    def digest(path: Path) -> str:  # streamed: Whisper small is 480 MB, don't hold it in RAM to hash it
+        with open(path, "rb") as f:
+            return hashlib.file_digest(f, "sha256").hexdigest()
+
     for rel, (url, sha) in (files or MODEL_FILES).items():
         dest = model_dir / rel
-        if dest.exists() and hashlib.sha256(dest.read_bytes()).hexdigest() == sha:
+        if dest.exists() and digest(dest) == sha:
             continue
         dest.parent.mkdir(parents=True, exist_ok=True)
         urllib.request.urlretrieve(url, dest)
-        if hashlib.sha256(dest.read_bytes()).hexdigest() != sha:
+        if digest(dest) != sha:
             dest.unlink()
             raise RuntimeError(f"checksum mismatch for {rel}")
 

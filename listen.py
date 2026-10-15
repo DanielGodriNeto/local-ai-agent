@@ -7,17 +7,30 @@ import sys
 import threading
 import time
 from collections import deque
+from pathlib import Path
 from typing import Callable, Iterator, Optional
 
 import numpy as np
 
 import access
 import earcons
+import intent
 import orchestrator as o
 import overlay
 import tts
 
 RATE, BLOCK_S = 16000, 0.1
+WHISPER_DIR = Path(__file__).parent / "models" / "whisper"
+_TOKENIZER = {"tokenizer.json": "fb7b63191e9bb045082c79fd742a3106a12c99513ab30df4a0d47fa6cb6fd0ab",
+              "vocabulary.txt": "34ce3fe1c5041027b3f8d42912270993f986dbc4bb34cf27f951e34a1e453913"}
+WHISPER = {  # size -> (pinned Systran/faster-whisper-<size> revision, sha256 per file). Weights: MIT.
+    "base": ("ebe41f70d5b6dfa9166e2c581c45c9c0cfc57b66", {
+        "config.json": "56a6d8110d311f19c8f0471e562832c7527f146b567275bfca59fcf7c184da9a",
+        "model.bin": "d01c3014881c9c6f3133c182f3d2887eb6ca1c789a7538c5c007196857a0a6a9", **_TOKENIZER}),
+    "small": ("536b0662742c02347bc0e980a01041f333bce120", {
+        "config.json": "b55496ac7940a7ae47d2c01eab40edfd8701feec1229d9cce3b40014383fb828",
+        "model.bin": "3e305921506d8872816023e4c273e75d2419fb89b24da97b4fe7bce14170d671", **_TOKENIZER}),
+}
 SHORT = 120  # answers up to this length fade after a few seconds; longer ones stay until Esc, click or hotkey
 HISTORY: deque = deque(maxlen=10)  # (what was said, answer); RAM only, gone when the agent stops
 
@@ -128,6 +141,26 @@ def mic_blocks(stop: threading.Event) -> Iterator[np.ndarray]:
                 pass
 
 
+def whisper_files(size: str) -> dict:
+    """{file: (pinned url, sha256)} for intent.fetch_model."""
+    rev, hashes = WHISPER[size]
+    return {f: (f"{intent.HF}/Systran/faster-whisper-{size}/resolve/{rev}/{f}", sha) for f, sha in hashes.items()}
+
+
+def whisper_ready(size: str) -> bool:
+    return size in WHISPER and all((WHISPER_DIR / size / f).exists() for f in WHISPER[size][1])
+
+
+def whisper_path(size: str) -> str:
+    """A pinned size (downloaded and sha256-checked on first use) or a folder you already have; nothing else."""
+    if size in WHISPER:
+        intent.fetch_model(WHISPER_DIR / size, whisper_files(size))
+        return str(WHISPER_DIR / size)
+    if Path(size).expanduser().is_dir():
+        return str(Path(size).expanduser())
+    raise ValueError(f"modelo Whisper '{size}' sem versao fixa: use {' ou '.join(WHISPER)}, ou uma pasta local")
+
+
 class LazyWhisper:
     """Loads in the background while the user starts talking (first run downloads the model)."""
 
@@ -139,7 +172,7 @@ class LazyWhisper:
         with self._lock:
             if isinstance(self._model, str):
                 from faster_whisper import WhisperModel
-                self._model = WhisperModel(self._model, device="cpu", compute_type="int8")
+                self._model = WhisperModel(whisper_path(self._model), device="cpu", compute_type="int8")
             return self._model
 
     def __call__(self, audio: np.ndarray) -> str:

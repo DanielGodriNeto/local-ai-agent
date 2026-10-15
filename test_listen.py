@@ -1,3 +1,4 @@
+import pytest
 import numpy as np
 
 import listen as L
@@ -212,3 +213,14 @@ def test_the_voice_is_released_after_speaking_even_if_it_fails(monkeypatch):
     ui, blocks = FakeUI(), iter([SILENCE] * 2 + [TONE] * 5 + [SILENCE] * 12)
     L.session(ui, ENERGY_CFG, blocks, models=lambda: (lambda _a: "oi", None, Voice()))
     assert calls == ["warm", "say", "release"] and ui.texts[-1] == "Oi."
+
+
+def test_whisper_sizes_are_pinned_and_unknown_names_refused(tmp_path, monkeypatch):
+    got = {}
+    monkeypatch.setattr(L.intent, "fetch_model", lambda d, files: got.update(dir=d, files=files))
+    assert L.whisper_path("base") == str(L.WHISPER_DIR / "base")
+    url, sha = got["files"]["model.bin"]
+    assert "/resolve/ebe41f70d5b6dfa9166e2c581c45c9c0cfc57b66/" in url and len(sha) == 64
+    assert L.whisper_path(str(tmp_path)) == str(tmp_path)
+    with pytest.raises(ValueError):
+        L.whisper_path("large-v3")
