@@ -188,3 +188,27 @@ def test_typed_grid_session_uses_the_text_box_for_each_round_and_never_the_ai(mo
     L.session(ui, ENERGY_CFG, iter([]), models=lambda: (lambda _a: "x", None), typed=True,
               detach=lambda: (_ for _ in ()).throw(AssertionError("moved to the background")))
     assert desk.clicks == [((450, 450), "left")] and ui.texts[-1] == "Cliquei."
+
+
+def test_the_voice_is_released_after_speaking_even_if_it_fails(monkeypatch):
+    calls = []
+
+    class Voice:
+        def warm(self):
+            calls.append("warm")
+
+        def say(self, text, cancel):
+            calls.append("say")
+            raise RuntimeError("no audio device")
+
+        def release(self):
+            calls.append("release")
+
+    def handle(text, cfg, on_event=None, **_kw):
+        on_event(type("E", (), {"kind": "text", "text": "Oi."})())
+        return "Oi."
+
+    monkeypatch.setattr(L.o, "handle", handle)
+    ui, blocks = FakeUI(), iter([SILENCE] * 2 + [TONE] * 5 + [SILENCE] * 12)
+    L.session(ui, ENERGY_CFG, blocks, models=lambda: (lambda _a: "oi", None, Voice()))
+    assert calls == ["warm", "say", "release"] and ui.texts[-1] == "Oi."

@@ -24,6 +24,9 @@ import time
 from pathlib import Path
 from typing import Callable, Optional
 
+# numpy's OpenBLAS reserves ~480 MB of buffers for its threads; nothing here does heavy linear algebra
+os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
+
 PORT = 48765
 HERE = Path(__file__).resolve().parent
 HOME = Path.home() / ".local-ai-agent"
@@ -134,6 +137,10 @@ class Models:
         self.pair = None
         import gc
         gc.collect()
+        if sys.platform == "win32":  # hand the freed pages back to Windows now, not when it runs short
+            import ctypes
+            ctypes.windll.kernel32.SetProcessWorkingSetSizeEx(ctypes.c_void_p(-1), ctypes.c_size_t(-1),
+                                                              ctypes.c_size_t(-1), 0)
         return True
 
 

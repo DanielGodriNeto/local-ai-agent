@@ -26,3 +26,10 @@ def test_say_plays_every_sentence_and_stops_on_cancel():
 
 def test_unknown_language_falls_back_to_english():
     assert tts.Speaker("xx").voice == "af_heart"
+
+
+def test_release_drops_the_model_until_the_next_use():
+    sp = tts.Speaker("pt")
+    sp._k = object()
+    sp.release()
+    assert sp._k is None

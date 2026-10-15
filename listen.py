@@ -267,6 +267,8 @@ def session(ui: overlay.Overlay, cfg: dict, blocks: Optional[Iterator[np.ndarray
                 voice.say(out, cancel)
             except Exception:  # noqa: BLE001 - a broken voice must not replace a good answer with an error
                 pass
+            finally:
+                voice.release()  # warm() loads it again while the AI writes the next answer
         ui.hold(4 if len(out) <= SHORT else None)
     except Exception as e:  # never leave the overlay stuck on screen
         ui.status("Erro", overlay.RED)

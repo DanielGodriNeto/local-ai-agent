@@ -64,6 +64,11 @@ class Speaker:
                 self._k = Kokoro(str(self.dir / "kokoro-v1.0.onnx"), str(self.dir / "voices-v1.0.bin"))
             return self._k
 
+    def release(self) -> None:
+        """Kokoro is the heaviest model (~350 MB) and only speaks at the end: drop it until the next warm()."""
+        with self._lock:
+            self._k = None
+
     def synth(self, sentence: str) -> tuple:
         if self._synth:
             return self._synth(sentence)
