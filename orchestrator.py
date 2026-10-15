@@ -7,12 +7,12 @@ import argparse
 import json
 import os
 import re
-import shutil
 import subprocess
 import sys
 import time
 from pathlib import Path
 
+import brains
 import game_indexer
 import intent
 import monitors
@@ -22,7 +22,7 @@ import solution_picker
 
 HERE = Path(__file__).parent
 PENDING = HERE / "presets.pending.json"
-PERMISSION_MODES = {"default", "plan", "acceptEdits"}
+BRAIN_NAMES = {"claude": "Claude Code", "codex": "Codex", "ollama": "a IA local"}
 SHELLS = {"sh", "bash", "zsh", "fish", "cmd", "powershell", "pwsh", "eval", "env", "sudo", "doas"}
 NAME_RE = re.compile(r"^[a-z][a-z0-9_]{2,30}$")
 PROPOSAL_RE = re.compile(r"```preset\s*(\{.*?\})\s*```", re.S)
@@ -129,28 +129,28 @@ def approve(cfg_path: Path = HERE / "presets.json", ask=input) -> int:
     return added
 
 
-def escalate(task: str, cfg: dict, pick=None, extra_dirs=()) -> str:
-    """Hand the task to Claude Code headless. Task goes via stdin so it can never be read as a flag."""
-    esc = cfg["escalation"]
-    claude = shutil.which("claude")
-    if not claude:
-        return "claude CLI nao encontrado no PATH"
-    if esc["permission_mode"] not in PERMISSION_MODES:
-        return f"permission_mode invalido: {esc['permission_mode']}"
-    argv = [claude, "-p", "--permission-mode", esc["permission_mode"], "--allowedTools", *esc["allowed_tools"]]
-    for d in extra_dirs:
-        argv += ["--add-dir", str(d)]
-    workdir = (HERE / Path(esc["workdir"]).expanduser()).resolve()
-    res = subprocess.run(argv, input=WRAPPER.format(task=task), cwd=workdir, capture_output=True,
-                         text=True, timeout=esc["timeout_s"])
-    out, choice = solution_picker.parse_options((res.stdout or res.stderr).strip())
-    if choice and pick:
-        i = pick(choice["question"], choice["options"])
-        if i is not None:  # one follow-up in the same conversation; the option text is data, sent on stdin
-            res = subprocess.run([*argv, "--continue"], input=f"Escolha do usuario: {choice['options'][i]}. Prossiga com essa opcao.",
-                                 cwd=workdir, capture_output=True, text=True, timeout=esc["timeout_s"])
-            out = (res.stdout or res.stderr).strip()
+CONV = brains.Conversation()  # short-term memory; lives as long as the process (the daemon keeps it)
+
+
+def escalate(task: str, cfg: dict, pick=None, extra_dirs=(), mode="task", on_event=None, cancel=None) -> str:
+    """Hand the request to the user's AI (Claude Code, Codex or Ollama). The text goes on stdin, never as a flag."""
+    CONV.idle_s = cfg["brain"].get("memory_idle_s", 600)
+    ask = lambda prompt, m: brains.ask(cfg, prompt, m, CONV, on_event or (lambda e: None), cancel, extra_dirs)
+    try:
+        out, choice = solution_picker.parse_options(ask(WRAPPER.format(task=task) if mode == "task" else task, mode).strip())
+        if choice and pick:
+            i = pick(choice["question"], choice["options"])
+            if i is not None:  # one follow-up in the same conversation; the option text is data, sent on stdin
+                out = ask(f"Escolha do usuario: {choice['options'][i]}. Prossiga com essa opcao.", "task").strip()
+    except brains.Cancelled:
+        return "(cancelado)"
+    except (OSError, TimeoutError, ValueError) as e:
+        return f"A IA falhou ({type(e).__name__}): {e}"[:300]
     return save_proposals(out, cfg)
+
+
+def brain_name(cfg: dict) -> str:
+    return BRAIN_NAMES.get(brains.pick(cfg) or "", "a IA")
 
 
 SCREEN_CONTEXT = """{task}
@@ -174,7 +174,9 @@ def handle_screen(text: str, req: dict, cfg: dict, dry_run: bool, confirm, pick)
     try:
         img = screen.capture(mons[n - 1])
         if req["image"]:
-            if not confirm(f"Enviar a IMAGEM INTEIRA do monitor {n} ao Claude Code? (pode conter senhas e mensagens)"):
+            if brains.pick(cfg) == "ollama":
+                return "Ler a imagem da tela precisa de Claude Code ou Codex; peça o texto (\"o que tem no monitor\")."
+            if not confirm(f"Enviar a IMAGEM INTEIRA do monitor {n} para {brain_name(cfg)}? (pode conter senhas e mensagens)"):
                 return out + " (cancelado)"
             img_path = screen.save_temp(img)
             content, extra = f"Imagem em {img_path} (leia com a ferramenta Read).", (img_path.parent,)
@@ -182,7 +184,7 @@ def handle_screen(text: str, req: dict, cfg: dict, dry_run: bool, confirm, pick)
             content = screen.ocr_text(img)
             if not content.strip():
                 return f"Nao achei texto no monitor {n}."
-            if not confirm(f"Enviar este texto do monitor {n} ao Claude Code?\n{content}"):
+            if not confirm(f"Enviar este texto do monitor {n} para {brain_name(cfg)}?\n{content}"):
                 return out + " (cancelado)"
             extra = ()
         task = SCREEN_CONTEXT.format(task=text, n=n, what=mode, content=content)
@@ -206,7 +208,10 @@ def confirmed(question: str, yes: bool) -> bool:
     if yes:
         return True
     if sys.stdin.isatty():
-        return input(f"{question} [s/N] ").strip().lower() in ("s", "y")
+        try:
+            return input(f"{question} [s/N] ").strip().lower() in ("s", "y")
+        except EOFError:  # stdin closed: no answer is a no
+            return False
     cmd = os.environ.get("AGENT_CONFIRM_CMD")
     if not cmd:
         return False
@@ -242,7 +247,23 @@ def run_preset(text: str, decision: dict, cfg: dict, dry_run: bool, ask) -> str:
     return out
 
 
-def handle(text: str, cfg: dict, decide=intent_decide, dry_run=False, yes=False, yes_escalate=False, confirm=None, pick=None) -> str:
+def escalate_with_consent(decision: dict, cfg: dict, dry_run: bool, ask, pick, on_event, cancel) -> str:
+    """Quick questions go straight to the AI (only your words leave; no tools). Tasks that read files ask first,
+    unless brain.confirm_quick says quick ones must ask too."""
+    mode, name = decision.get("mode", "task"), brain_name(cfg)
+    out = f"{name} ({mode}): {decision['task']}"
+    if dry_run:
+        return out + " (dry-run)"
+    if mode == "task" or cfg["brain"].get("confirm_quick"):
+        where = brains.workdir(cfg)
+        reach = f"Ele so pode ler arquivos em {where}." if mode == "task" else "So o seu pedido sai do PC."
+        if not ask(f'Entendi: "{decision["task"][:300]}"\nPedir para {name}? {reach}'):
+            return out + " (cancelado)"
+    return escalate(decision["task"], cfg, pick, mode=mode, on_event=on_event, cancel=cancel)
+
+
+def handle(text: str, cfg: dict, decide=intent_decide, dry_run=False, yes=False, yes_escalate=False, confirm=None,
+           pick=None, on_event=None, cancel=None) -> str:
     """confirm: optional callable(question)->bool (e.g. the voice overlay); default is terminal/AGENT_CONFIRM_CMD."""
     ask = confirmed if confirm is None else (lambda q, y: y or confirm(q))
     if (req := screen.parse_request(text)):
@@ -259,16 +280,7 @@ def handle(text: str, cfg: dict, decide=intent_decide, dry_run=False, yes=False,
     if action == "run_preset":
         out = run_preset(text, decision, cfg, dry_run, lambda q: ask(q, yes))
     elif action == "escalate":
-        esc = cfg["escalation"]
-        out = f"escalar p/ Claude Code: {decision['task']}"
-        question = (f"Enviar ao Claude Code?\n  tarefa: {decision['task'][:300]}\n"
-                    f"  ferramentas: {esc['allowed_tools']}  modo: {esc['permission_mode']}  pasta: {esc['workdir']}")
-        if dry_run:
-            out += " (dry-run)"
-        elif ask(question, yes_escalate):
-            out = escalate(decision["task"], cfg, pick)
-        else:
-            out += " (cancelado)"
+        out = escalate_with_consent(decision, cfg, dry_run, lambda q: ask(q, yes_escalate), pick, on_event, cancel)
     log({"action": action, "preset": decision.get("preset"), "input_len": len(text), "dry_run": dry_run})
     return out
 

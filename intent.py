@@ -123,7 +123,9 @@ class Matcher:
         ranked = self.scores(text)
         (top, s1), (second, s2) = ranked[0], ranked[1]
         if top.startswith("_"):
-            return {"action": "escalate", "mode": top[1:], "task": text}
+            # a near-tie between task and quick on a question is a follow-up ("e qual a população dela?")
+            near_quick = top == "_task" and second == "_quick" and s1 - s2 < self.margin and question(text)
+            return {"action": "escalate", "mode": "quick" if near_quick else top[1:], "task": text}
         if question(text):
             return {"action": "escalate", "mode": "quick", "task": text}
         if opposing(text) or s1 < self.min_score:

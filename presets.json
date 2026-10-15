@@ -4,15 +4,29 @@
     "min_score": 0.86,
     "margin": 0.02
   },
-  "escalation": {
-    "workdir": ".",
-    "allowed_tools": [
-      "Read",
-      "Grep",
-      "Glob"
-    ],
-    "permission_mode": "default",
-    "timeout_s": 600
+  "brain": {
+    "use": "auto",
+    "workdir": "",
+    "timeout_s": 600,
+    "memory_idle_s": 600,
+    "confirm_quick": false,
+    "claude": {
+      "model": "",
+      "fast_model": "haiku",
+      "tools": [
+        "Read",
+        "Grep",
+        "Glob"
+      ]
+    },
+    "codex": {
+      "model": "",
+      "fast_model": ""
+    },
+    "ollama": {
+      "url": "http://127.0.0.1:11434",
+      "model": ""
+    }
   },
   "presets": {
     "open_browser": {

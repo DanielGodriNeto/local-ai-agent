@@ -33,6 +33,13 @@ def test_builtin_classes_escalate_with_mode():
     assert m.decide("tem um bug no codigo")["mode"] == "task"
 
 
+def test_question_near_tie_between_task_and_quick_goes_quick():
+    builtin = {"quick": ["capital"], "task": ["bug codigo"]}
+    m = intent.Matcher({}, embed=fake_embed, builtin=builtin, margin=0.5)
+    assert m.decide("capital bug codigo?")["mode"] == "quick"  # task on top, but close and a question
+    assert m.decide("capital bug codigo")["mode"] == "task"  # not a question: the top class wins
+
+
 def test_low_score_escalates_instead_of_guessing():
     assert matcher(min_score=0.99, margin=0.1).decide("navegador")["action"] == "run_preset"
     assert matcher(min_score=0.99, margin=0.1).decide("navegador terminal")["action"] != "run_preset"

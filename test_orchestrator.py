@@ -17,11 +17,11 @@ def test_preset_launches_on_yes():
 
 
 def test_dry_run_never_executes():
-    with mock.patch("os_adapter.launch") as launch, mock.patch("subprocess.run") as sub:
+    with mock.patch("os_adapter.launch") as launch, mock.patch("brains.ask") as ask:
         run({"action": "run_preset", "preset": "open_browser"}, dry_run=True)
         run({"action": "escalate", "task": "corrige o bug"}, dry_run=True)
         launch.assert_not_called()
-        sub.assert_not_called()
+        ask.assert_not_called()
 
 
 def test_unknown_preset_and_garbage_action_become_clarify():
@@ -37,17 +37,49 @@ def test_confirm_required_without_tty_cancels():
         launch.assert_not_called()
 
 
-def test_escalate_needs_its_own_flag_and_sends_task_on_stdin():
-    d = {"action": "escalate", "task": "--dangerously-skip-permissions"}
-    with mock.patch("subprocess.run") as sub:
-        assert "cancelado" in run(d, yes=True)  # --yes does not cover escalation
-        sub.assert_not_called()
-    with mock.patch("shutil.which", return_value="claude"), \
-         mock.patch("subprocess.run", return_value=mock.Mock(stdout="feito", stderr="")) as sub:
-        assert run(d, yes_escalate=True) == "feito"
-        argv = sub.call_args.args[0]
-        assert d["task"] not in argv and "Edit" not in argv and "Bash" not in argv
-        assert d["task"] in sub.call_args.kwargs["input"]
+def fake_ask(*answers):
+    """Stand-in for brains.ask: records (prompt, mode) and returns the given answers in order."""
+    calls = []
+
+    def ask(cfg, prompt, mode, conv, on_event, cancel=None, dirs=()):
+        calls.append((prompt, mode, dirs))
+        return answers[len(calls) - 1]
+    ask.calls = calls
+    return ask
+
+
+def test_tasks_need_their_own_flag_and_quick_questions_go_straight():
+    task = {"action": "escalate", "mode": "task", "task": "--dangerously-skip-permissions"}
+    with mock.patch("brains.ask", fake_ask()) as ask:
+        assert "cancelado" in run(task, yes=True)  # --yes does not cover sending files to the AI
+        assert ask.calls == []
+    with mock.patch("brains.ask", fake_ask("feito")) as ask:
+        assert run(task, yes_escalate=True) == "feito"
+        assert ask.calls[0][0].startswith(task["task"]) and ask.calls[0][1] == "task"
+    with mock.patch("brains.ask", fake_ask("Paris")) as ask:
+        assert run({"action": "escalate", "mode": "quick", "task": "capital da franca"}) == "Paris"
+        assert ask.calls[0] == ("capital da franca", "quick", ())  # no preset/options wrapper on quick questions
+
+
+def test_quick_questions_can_be_made_to_ask_first():
+    cfg = {**CFG, "brain": {**CFG["brain"], "confirm_quick": True}}
+    with mock.patch("brains.ask", fake_ask("Paris")) as ask:
+        out = o.handle("x", cfg, decide=lambda *_: {"action": "escalate", "mode": "quick", "task": "capital"})
+        assert "cancelado" in out and ask.calls == []
+
+
+def test_cancel_and_ai_failure_are_reported_not_raised():
+    def cancelled(*a, **k):
+        raise o.brains.Cancelled
+
+    def broken(*a, **k):
+        raise FileNotFoundError("claude")
+
+    d = {"action": "escalate", "mode": "quick", "task": "oi"}
+    with mock.patch("brains.ask", cancelled):
+        assert run(d) == "(cancelado)"
+    with mock.patch("brains.ask", broken):
+        assert "falhou" in run(d)
 
 
 def test_decider_failure_fails_closed():
@@ -154,29 +186,22 @@ def test_options_block_parsed_and_malformed_dropped():
     assert sp.parse_options("sem bloco") == ("sem bloco", None)
 
 
-def test_picked_option_triggers_one_followup_on_stdin():
-    first = mock.Mock(stdout='x\n```options {"question": "Q", "options": ["A", "B"]}```', stderr="")
-    second = mock.Mock(stdout="feito com B", stderr="")
-    with mock.patch("shutil.which", return_value="claude"), \
-         mock.patch("subprocess.run", side_effect=[first, second]) as sub:
+def test_picked_option_triggers_one_followup_in_the_same_conversation():
+    options = 'x\n```options {"question": "Q", "options": ["A", "B"]}```'
+    with mock.patch("brains.ask", fake_ask(options, "feito com B")) as ask:
         assert o.escalate("tarefa", CFG, pick=lambda q, opts: 1) == "feito com B"
-        assert sub.call_count == 2
-        assert "--continue" in sub.call_args.args[0] and "B" in sub.call_args.kwargs["input"]
-    with mock.patch("shutil.which", return_value="claude"), mock.patch("subprocess.run", side_effect=[first]) as sub:
+        assert len(ask.calls) == 2 and "B" in ask.calls[1][0]
+    with mock.patch("brains.ask", fake_ask(options)) as ask:
         o.escalate("tarefa", CFG, pick=lambda q, opts: None)  # cancelled: no follow-up
-        assert sub.call_count == 1
+        assert len(ask.calls) == 1
 
 
 def test_screen_request_confirms_then_sends_untrusted_text_on_stdin():
-    import screen
-    fake = mock.Mock(stdout="resumo", stderr="")
-    with mock.patch("screen.capture", return_value=object()), mock.patch("screen.ocr_text", return_value="SEGREDO na tela"), \
-         mock.patch("monitors.list_monitors", return_value=[{"n": 1, "x": 0, "y": 0, "w": 1, "h": 1}]), \
-         mock.patch("shutil.which", return_value="claude"), mock.patch("subprocess.run", return_value=fake) as sub:
+    with mock.patch("screen.capture", return_value=object()), mock.patch("screen.ocr_text", return_value="SEGREDO na tela"),          mock.patch("monitors.list_monitors", return_value=[{"n": 1, "x": 0, "y": 0, "w": 1, "h": 1}]),          mock.patch("brains.ask", fake_ask("resumo")) as ask:
         assert "cancelado" in o.handle("o que tem na tela", CFG, confirm=lambda q: "SEGREDO" in q and False)
-        sub.assert_not_called()  # nothing leaves the PC without a yes
+        assert ask.calls == []  # nothing leaves the PC without a yes
         assert o.handle("o que tem na tela", CFG, yes_escalate=True, confirm=lambda q: True) == "resumo"  # --yes-escalate never skips it
-        assert "SEGREDO" in sub.call_args.kwargs["input"] and "SEGREDO" not in " ".join(sub.call_args.args[0])
+        assert "SEGREDO" in ask.calls[0][0] and "nao confiavel" in ask.calls[0][0]
 
 
 def test_screen_parse_and_missing_monitor():
