@@ -221,7 +221,8 @@ def by_ai(cmd: dict, cfg: dict, desk, t: dict, confirm, cancel: threading.Event,
     heard = f"Entendi: “{cmd.get('said', name)[:200]}”\n"
     if brain != "claude":  # ponytail: Claude Code reads the image file; Codex/Ollama would need an image flag
         return f"Não achei “{name}”. Diga “mostrar grade” para clicar por números."
-    if not confirm(f"{heard}Não achei “{name}” em “{t['title'][:80]}”.\nEnviar {getattr(desk, 'SHOT', 'uma imagem só desta janela')} "
+    shot = getattr(desk, "SHOT", "uma imagem só desta janela")  # say exactly what leaves the PC
+    if not confirm(f"{heard}Não achei “{name}” em “{t['title'][:80]}”.\nEnviar {shot} "
                    f"para {orchestrator.brain_name(cfg)}? Pode ter senhas e mensagens."):
         return "(cancelado)"
     img = desk.capture(t)
