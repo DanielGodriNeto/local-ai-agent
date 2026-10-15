@@ -22,13 +22,13 @@ Goal: feel like a resident personal assistant ("Jarvis"), light on RAM, works wi
 - [x] Daemon socket on 127.0.0.1 only, accepts a fixed command set, requires a per-user token file.
 - [x] Ambiguous or low-confidence intent never runs a preset; confirm-flagged presets still confirm.
 - [x] Polarity guard: a request with an opposing verb (fecha, para, desliga, encerra, cancela) never runs an "open/start" preset.
-- [ ] Every confirmation echoes the transcribed text ("Entendi: ...").
-- [ ] Session ids stored per brain (`--resume <id>`, never `--continue`); Ollama/Gemini replay last N turns from RAM.
-- [ ] Screen image mode: pass the image dir explicitly per brain (Claude `--add-dir`), or fall back to OCR text.
-- [ ] Preset proposals from any brain stay queued until `approve`.
-- [ ] Downloaded models pinned by revision and verified by sha256.
-- [ ] Conversation history only in RAM; log stays metadata-only.
-- [ ] Screen/OCR content still shown in full before it leaves the PC.
+- [x] Every confirmation echoes the transcribed text ("Entendi: ...").
+- [x] Session ids stored per brain (`--resume <id>`, never `--continue`); Ollama/Gemini replay last N turns from RAM.
+- [x] Screen image mode: pass the image dir explicitly per brain (Claude `--add-dir`), or fall back to OCR text.
+- [x] Preset proposals from any brain stay queued until `approve`.
+- [x] Downloaded models pinned by revision and verified by sha256.
+- [x] Conversation history only in RAM; log stays metadata-only.
+- [x] Screen/OCR content still shown in full before it leaves the PC.
 
 ## Later phases
 

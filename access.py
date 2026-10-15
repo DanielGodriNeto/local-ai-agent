@@ -190,9 +190,10 @@ def grid(desk, t: Optional[dict], hear, cancel: threading.Event) -> str:
 
 def by_ai(cmd: dict, cfg: dict, desk, t: dict, confirm, cancel: threading.Event, ask_ai) -> str:
     name, brain = cmd["name"], brains.pick(cfg)
+    heard = f"Entendi: “{cmd.get('said', name)[:200]}”\n"
     if brain != "claude":  # ponytail: Claude Code reads the image file; Codex/Ollama would need an image flag
         return f"Não achei “{name}”. Diga “mostrar grade” para clicar por números."
-    if not confirm(f"Não achei “{name}” em “{t['title'][:80]}”.\nEnviar uma imagem só desta janela para "
+    if not confirm(f"{heard}Não achei “{name}” em “{t['title'][:80]}”.\nEnviar uma imagem só desta janela para "
                    f"{orchestrator.brain_name(cfg)}? Pode ter senhas e mensagens."):
         return "(cancelado)"
     img = desk.capture(t)
@@ -211,7 +212,7 @@ def by_ai(cmd: dict, cfg: dict, desk, t: dict, confirm, cancel: threading.Event,
     point = to_screen(point, t["rect"], scale)
     mark = desk.marker(point)
     try:
-        ok = confirm(f"Clicar aqui em “{name}”?")
+        ok = confirm(f"{heard}Clicar aqui em “{name}”?")
     finally:
         mark.close()
     if not ok:

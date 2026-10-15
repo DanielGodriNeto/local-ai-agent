@@ -200,7 +200,9 @@ def test_picked_option_triggers_one_followup_in_the_same_conversation():
 
 def test_screen_request_confirms_then_sends_untrusted_text_on_stdin():
     with mock.patch("screen.capture", return_value=object()), mock.patch("screen.ocr_text", return_value="SEGREDO na tela"),          mock.patch("monitors.list_monitors", return_value=[{"n": 1, "x": 0, "y": 0, "w": 1, "h": 1}]),          mock.patch("brains.ask", fake_ask("resumo")) as ask:
-        assert "cancelado" in o.handle("o que tem na tela", CFG, confirm=lambda q: "SEGREDO" in q and False)
+        qs = []
+        assert "cancelado" in o.handle("o que tem na tela", CFG, confirm=lambda q: qs.append(q) or False)
+        assert qs[0].startswith('Entendi: "o que tem na tela"') and "SEGREDO" in qs[0]
         assert ask.calls == []  # nothing leaves the PC without a yes
         assert o.handle("o que tem na tela", CFG, yes_escalate=True, confirm=lambda q: True) == "resumo"  # --yes-escalate never skips it
         assert "SEGREDO" in ask.calls[0][0] and "nao confiavel" in ask.calls[0][0]

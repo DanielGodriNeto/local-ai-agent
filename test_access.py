@@ -142,8 +142,9 @@ def test_elevated_or_changed_window_is_never_clicked():
 
 def test_ai_fallback_asks_twice_and_clicks_the_scaled_point():
     desk = FakeDesk()
-    out, asked = run({"do": "click", "name": "enviar", "button": "left"}, desk)
+    out, asked = run({"do": "click", "name": "enviar", "button": "left", "said": "clica no enviar"}, desk)
     assert "Bloco de Notas" in asked[0] and "senhas" in asked[0]  # consent names the window, warns
+    assert asked[0].startswith('Entendi: “clica no enviar”') and asked[2].startswith("Entendi:")
     assert "1280x800" in asked[1] and "enviar" in asked[1]  # image sent downscaled; the prompt says its size
     assert "Clicar aqui" in asked[2] and ("marker", (1280, 800)) in desk.shown
     assert desk.clicks == [((1280, 800), "left")] and desk.shown[-1] == ("close",)

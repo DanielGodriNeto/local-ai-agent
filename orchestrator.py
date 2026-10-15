@@ -179,7 +179,7 @@ def handle_screen(text: str, req: dict, cfg: dict, dry_run: bool, confirm, pick)
         if req["image"]:
             if brains.pick(cfg) == "ollama":
                 return "Ler a imagem da tela precisa de Claude Code ou Codex; peça o texto (\"o que tem no monitor\")."
-            if not confirm(f"Enviar a IMAGEM INTEIRA do monitor {n} para {brain_name(cfg)}? (pode conter senhas e mensagens)"):
+            if not confirm(f"Entendi: \"{text[:200]}\"\nEnviar a IMAGEM INTEIRA do monitor {n} para {brain_name(cfg)}? (pode conter senhas e mensagens)"):
                 return out + " (cancelado)"
             img_path = screen.save_temp(img)
             content, extra = f"Imagem em {img_path} (leia com a ferramenta Read).", (img_path.parent,)
@@ -187,7 +187,7 @@ def handle_screen(text: str, req: dict, cfg: dict, dry_run: bool, confirm, pick)
             content = screen.ocr_text(img)
             if not content.strip():
                 return f"Nao achei texto no monitor {n}."
-            if not confirm(f"Enviar este texto do monitor {n} para {brain_name(cfg)}?\n{content}"):
+            if not confirm(f"Entendi: \"{text[:200]}\"\nEnviar este texto do monitor {n} para {brain_name(cfg)}?\n{content}"):
                 return out + " (cancelado)"
             extra = ()
         task = SCREEN_CONTEXT.format(task=text, n=n, what=mode, content=content)
