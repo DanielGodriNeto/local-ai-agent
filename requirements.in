@@ -1,3 +1,5 @@
+# Direct dependencies. The pinned, hash-checked lock is requirements.txt; to update it:
+#   uv pip compile requirements.in --universal --python-version 3.11 --generate-hashes -o requirements.txt --upgrade
 onnxruntime
 sentencepiece
 numpy

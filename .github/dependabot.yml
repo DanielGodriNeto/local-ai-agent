@@ -1,0 +1,8 @@
+version: 2
+updates:
+  # Python packages: requirements.txt is a uv lock Dependabot can't update yet (dependabot-core#10478);
+  # GitHub still raises security alerts for it. Update with the command at the top of requirements.in.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly

@@ -13,7 +13,7 @@ Windows and Linux (Hyprland). The Linux scripts are untested on real hardware.
 ## Setup
 
 ```bash
-pip install -r requirements.txt
+pip install --require-hashes -r requirements.txt   # exact versions, each file checked by hash (edit requirements.in to change them)
 python onboarding.py            # checks the AI and the mic, downloads the models (also opens on the agent's first run)
 python intent.py               # or just the intent model (~125 MB, pinned and sha256-checked) into models/e5/
 python game_indexer.py          # optional: index Steam games into games.json
