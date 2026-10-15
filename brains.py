@@ -23,6 +23,7 @@ import dev_overlay
 
 QUICK = "\n\n---\nResponda curto (no maximo 3 frases), na lingua do pedido, sem markdown."
 LOOPBACK = {"127.0.0.1", "localhost", "::1"}
+TOOLLESS_QUICK = {"claude", "ollama"}  # brains whose quick mode truly has no tools (checked live for claude)
 
 
 @dataclass

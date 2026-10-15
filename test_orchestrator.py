@@ -213,3 +213,13 @@ def test_screen_parse_and_missing_monitor():
     assert screen.parse_request("abre o navegador") is None
     with mock.patch("monitors.list_monitors", return_value=[{"n": 1}]):
         assert "nao existe" in o.handle("le o monitor 3", CFG, confirm=lambda q: True)
+
+
+def test_codex_quick_still_asks_because_its_shell_can_read_any_file():
+    d = {"action": "escalate", "mode": "quick", "task": "capital"}
+    asked = []
+    with mock.patch("brains.pick", return_value="codex"), mock.patch("brains.ask", fake_ask("Paris")) as ask:
+        assert "cancelado" in o.handle("x", CFG, decide=lambda *_: d, confirm=lambda q: asked.append(q) or False)
+        assert ask.calls == [] and "qualquer arquivo" in asked[0]
+    with mock.patch("brains.pick", return_value="claude"), mock.patch("brains.ask", fake_ask("Paris")):
+        assert run(d) == "Paris"

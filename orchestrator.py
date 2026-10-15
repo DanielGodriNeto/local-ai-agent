@@ -253,13 +253,18 @@ def run_preset(text: str, decision: dict, cfg: dict, dry_run: bool, ask) -> str:
 def escalate_with_consent(decision: dict, cfg: dict, dry_run: bool, ask, pick, on_event, cancel) -> str:
     """Quick questions go straight to the AI (only your words leave; no tools). Tasks that read files ask first,
     unless brain.confirm_quick says quick ones must ask too."""
-    mode, name = decision.get("mode", "task"), brain_name(cfg)
+    mode, name, toolless = decision.get("mode", "task"), brain_name(cfg), brains.pick(cfg) in brains.TOOLLESS_QUICK
     out = f"{name} ({mode}): {decision['task']}"
     if dry_run:
         return out + " (dry-run)"
-    if mode == "task" or cfg["brain"].get("confirm_quick"):
-        where = brains.workdir(cfg)
-        reach = f"Ele so pode ler arquivos em {where}." if mode == "task" else "So o seu pedido sai do PC."
+    # Codex cannot turn its shell off: even read-only it can read any file, so it always asks first
+    if mode == "task" or cfg["brain"].get("confirm_quick") or not toolless:
+        if not toolless:
+            reach = "Ele pode LER qualquer arquivo do PC (sem alterar nada)."
+        elif mode == "task":
+            reach = f"Ele so pode ler arquivos em {brains.workdir(cfg)}."
+        else:
+            reach = "So o seu pedido sai do PC."
         if not ask(f'Entendi: "{decision["task"][:300]}"\nPedir para {name}? {reach}'):
             return out + " (cancelado)"
     return escalate(decision["task"], cfg, pick, mode=mode, on_event=on_event, cancel=cancel)
