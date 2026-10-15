@@ -155,6 +155,24 @@ def test_cancel_kills_the_whole_process_tree(tmp_path):
     assert not alive(grandchild)
 
 
+ORPHAN = CHILD.replace("time.sleep(60)\n", "")  # the CLI exits at once; its child keeps our stdout open
+
+
+def test_cancel_also_kills_children_of_a_cli_that_already_exited(tmp_path):
+    cancel = threading.Event()
+    lines = brains.stream_lines([sys.executable, "-c", ORPHAN], "x", tmp_path, 30, cancel)
+    next(lines)
+    orphan = int(next(lines))
+    time.sleep(0.5)
+    t = time.time()
+    cancel.set()
+    with pytest.raises(brains.Cancelled):
+        list(lines)
+    assert time.time() - t < 5
+    time.sleep(0.5)
+    assert not alive(orphan)
+
+
 def test_timeout_also_kills(tmp_path):
     lines = brains.stream_lines([sys.executable, "-c", CHILD], "x", tmp_path, 1, threading.Event())
     with pytest.raises(TimeoutError):

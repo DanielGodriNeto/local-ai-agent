@@ -57,10 +57,42 @@ class Cancelled(Exception):
 
 # ---- process edge -------------------------------------------------------------------------------------------------
 
+def job_for(proc: subprocess.Popen) -> Optional[int]:
+    """Windows: a kill-on-close Job Object holding the CLI, so its children die with it even after it exits.
+    ponytail: assigned just after start, so a child spawned in the first instant escapes; CREATE_SUSPENDED closes it."""
+    import ctypes
+    from ctypes import wintypes
+
+    class Basic(ctypes.Structure):
+        _fields_ = [("user_time", ctypes.c_int64), ("job_time", ctypes.c_int64), ("flags", wintypes.DWORD),
+                    ("min_ws", ctypes.c_size_t), ("max_ws", ctypes.c_size_t), ("procs", wintypes.DWORD),
+                    ("affinity", ctypes.c_size_t), ("priority", wintypes.DWORD), ("sched", wintypes.DWORD)]
+
+    class Extended(ctypes.Structure):
+        _fields_ = [("basic", Basic), ("io", ctypes.c_uint64 * 6), ("mem", ctypes.c_size_t * 4)]
+
+    k = ctypes.WinDLL("kernel32", use_last_error=True)
+    k.CreateJobObjectW.restype = wintypes.HANDLE
+    k.SetInformationJobObject.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD]
+    k.AssignProcessToJobObject.argtypes = [wintypes.HANDLE, wintypes.HANDLE]
+    job = k.CreateJobObjectW(None, None)
+    info = Extended()
+    info.basic.flags = 0x2000  # JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+    limited = job and k.SetInformationJobObject(job, 9, ctypes.byref(info), ctypes.sizeof(info))
+    if limited and k.AssignProcessToJobObject(job, int(proc._handle)):
+        return job
+    if job:
+        k.CloseHandle(wintypes.HANDLE(job))
+    return None
+
+
 def kill_tree(proc: subprocess.Popen) -> None:
     if sys.platform == "win32":
-        # ponytail: children left behind by a CLI that already exited escape; a Job Object would catch them
-        if proc.poll() is None:
+        job = proc.__dict__.pop("job", None)  # atomic: the watch thread and the caller may both get here
+        if job:
+            import ctypes
+            ctypes.windll.kernel32.CloseHandle(ctypes.c_void_p(job))  # kill-on-close ends the CLI and every child
+        elif proc.poll() is None:
             subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"], capture_output=True)
         return
     try:  # the group outlives its leader, so kill it even after the CLI exits
@@ -104,6 +136,8 @@ def stream_lines(argv: list[str], stdin_text: str, cwd: Path, timeout: float, ca
     proc = subprocess.Popen(argv, cwd=cwd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                             text=True, encoding="utf-8", errors="replace", creationflags=flags,
                             start_new_session=sys.platform != "win32")
+    if sys.platform == "win32":
+        proc.job = job_for(proc)
     deadline = time.time() + timeout
     done = watch(cancel, deadline, lambda: kill_tree(proc))
     try:
