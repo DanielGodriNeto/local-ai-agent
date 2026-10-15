@@ -35,3 +35,28 @@ Goal: feel like a resident personal assistant ("Jarvis"), light on RAM, works wi
 B voice (Silero VAD, whisper small, earcons, Kokoro TTS, "Hey Jarvis"), C UI (PySide6 glass pill, buttons,
 Live Activity, settings, a11y), D onboarding, typed input, background tasks + notification,
 E voice accessibility (number grid, click by name via UI Automation, AI fallback).
+
+## Phase E: voice accessibility (Windows first)
+
+Commands, matched before the intent model (strict, start of the sentence, never a question):
+"clica em X" / "clique duplo em X" / "clique direito em X" / "aperta X"; "mostrar grade" / "grade".
+
+| Step | What | Check (gate) |
+|---|---|---|
+| E1 | `access.py` pure part: parse commands and spoken numbers (5, "cinco"), rank UI names (exact > word prefix > contains, accent-insensitive), grid cell math (3x3, zoom into a cell), strict parse of the AI's coordinates. | Unit tests. |
+| E2 | Windows adapter: target = top visible window not from this process (skip tool/cloaked windows). UI Automation via `comtypes` (one cached FindAll: name, type, rect, offscreen, enabled). Left click = Invoke pattern when there is one, else a real click at the centre; right/double = real click. Our own overlay windows turn click-through (WS_EX_TRANSPARENT) during a real click. | Flow tests with fakes; live smoke on Notepad. |
+| E3 | Number grid: input-transparent window over the target's monitor, 3x3 numbers; a number zooms in, "clica" / "duplo" / "direito" clicks the centre, "clica no 5" clicks that cell, "cancela" or silence closes. Voice rounds reuse the mic; typed mode uses the text box. | Flow test with scripted answers; screenshot. |
+| E4 | AI fallback when nothing matches: asks first, then sends only the target window (downscaled to <= 1280 px) to Claude Code, which returns JSON coordinates; a marker shows the point and asks "Clicar aqui?" before clicking. Codex/Ollama: suggest the grid instead. | Flow tests; coordinate validation tests. |
+
+Security checklist (Phase E):
+- [x] A single exact UI match clicks at once (the user named it); several matches ask which; the AI's point always asks, with a marker.
+- [x] The window image is sent only after a yes that names the window and warns it may hold private data; temp file deleted in `finally`.
+- [x] The AI's reply is data: only `{"x": int, "y": int}` inside the image is accepted; anything else = not found.
+- [x] Never clicks our own windows; never runs when the overlay closed or the session was cancelled.
+- [x] Log is metadata only (action, match count), never the names spoken or seen.
+- [x] Elevated target windows are refused up front (UIPI would drop the click silently); unknown elevation = refuse.
+- [x] Right before any click the target window must still be the top one, with the same rect; else "a janela mudou".
+- [x] The image is the window alone (PrintWindow), not a crop of the screen with whatever overlaps it.
+- [x] All coordinates are physical pixels (UIA, SendInput, grid/marker mapped per screen); AI points scaled back
+      explicitly, tested with a negative-origin monitor.
+- [x] Grid rounds: a fresh Segmenter per round, at most 8 rounds, no move to the background while it is open.

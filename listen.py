@@ -11,6 +11,7 @@ from typing import Callable, Iterator, Optional
 
 import numpy as np
 
+import access
 import earcons
 import orchestrator as o
 import overlay
@@ -178,8 +179,9 @@ def session(ui: overlay.Overlay, cfg: dict, blocks: Optional[Iterator[np.ndarray
         stt, decide, *extra = models() if models else (LazyWhisper(v["model"], v["language"]), preload_intent(cfg),
                                                         speaker(cfg))
         voice = extra[0] if extra else None
-        seg = Segmenter(v["silence_s"], v["no_speech_timeout_s"], v["max_s"], v["min_rms"],
-                        vad=SileroVAD() if v.get("vad", "silero") == "silero" else None)
+        def segmenter() -> Segmenter:  # one per utterance: its noise floor and the VAD state start fresh
+            return Segmenter(v["silence_s"], v["no_speech_timeout_s"], v["max_s"], v["min_rms"],
+                             vad=SileroVAD() if v.get("vad", "silero") == "silero" else None)
         stop = threading.Event()
 
         def watch():
@@ -194,7 +196,7 @@ def session(ui: overlay.Overlay, cfg: dict, blocks: Optional[Iterator[np.ndarray
             if not text:
                 return ui.close()
         else:
-            text = listen(blocks or mic_blocks(stop), seg, stt, ui.text, v["partial_every_s"])
+            text = listen(blocks or mic_blocks(stop), segmenter(), stt, ui.text, v["partial_every_s"])
         if not text:
             ui.status("Nada ouvido", overlay.IDLE)
             earcons.play("error", sound)
@@ -210,6 +212,20 @@ def session(ui: overlay.Overlay, cfg: dict, blocks: Optional[Iterator[np.ndarray
                 ui.status("Trabalhando", overlay.IDLE)
             return ok
 
+        def hear(prompt: str) -> Optional[str]:  # one more answer, for the number grid
+            if typed:
+                return ui.prompt(prompt)
+            ui.status(prompt, overlay.LISTEN)
+            earcons.play("listen", sound)
+            return listen(blocks or mic_blocks(stop), segmenter(), stt, ui.text, v["partial_every_s"])
+
+        if (cmd := access.parse(text)):  # voice accessibility: no AI unless nothing matches, never in the background
+            desk = access.Desk(ui.gui, ui.win) if sys.platform == "win32" else None
+            out = access.run(cmd, cfg, desk, hear, confirm, lambda q, opts: ui.choose(q, opts), cancel)
+            ui.status("Pronto", overlay.GREEN)
+            earcons.play("done", sound)
+            ui.text(out)
+            return ui.hold(3)
         streamed = []
 
         def on_event(e) -> None:  # the answer appears as the AI writes it; tool use shows in the tag

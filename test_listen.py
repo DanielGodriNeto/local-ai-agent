@@ -168,3 +168,23 @@ def test_typed_session_closes_on_empty_text():
     ui = EmptyUI()
     L.session(ui, ENERGY_CFG, iter([]), models=lambda: (lambda _a: "x", None), typed=True)
     assert ui.closed.is_set() and ui.holds == []
+
+
+def test_typed_grid_session_uses_the_text_box_for_each_round_and_never_the_ai(monkeypatch):
+    from test_access import FakeDesk
+    answers, desk = ["mostrar grade", "5", "clica"], FakeDesk()
+
+    class GridUI(FakeUI):
+        gui = win = None
+
+        def prompt(self, _q):
+            return answers.pop(0)
+
+    monkeypatch.setattr(L.o, "handle", lambda *a, **k: (_ for _ in ()).throw(AssertionError("went to the AI")))
+    monkeypatch.setattr(L.access, "Desk", lambda *_a: desk)
+    monkeypatch.setattr(L.sys, "platform", "win32")
+    monkeypatch.setattr(L.access.orchestrator, "log", lambda entry: None)
+    ui = GridUI()
+    L.session(ui, ENERGY_CFG, iter([]), models=lambda: (lambda _a: "x", None), typed=True,
+              detach=lambda: (_ for _ in ()).throw(AssertionError("moved to the background")))
+    assert desk.clicks == [((450, 450), "left")] and ui.texts[-1] == "Cliquei."

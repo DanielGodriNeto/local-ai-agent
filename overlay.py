@@ -204,6 +204,8 @@ class Overlay:
         except RuntimeError:  # the window is already gone (closed and deleted): nothing left to update
             pass
 
+    gui = _do  # gui(fn) runs fn on the Qt thread, from any thread
+
     def status(self, label: str, state: str = IDLE) -> None:
         def apply():
             self._state, self._tag = state, label
