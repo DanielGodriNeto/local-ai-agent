@@ -128,39 +128,14 @@
     "min_rms": 0.012
   },
   "ui": {
+    "theme": "auto",
+    "accent": "blue",
+    "text_scale": 1.0,
     "font": "",
-    "colors": {
-      "bg": "#05070d",
-      "fg": "#e6fbff",
-      "hint": "#4a7d86",
-      "idle": "#fcee0a",
-      "accent": "#00f0ff",
-      "error": "#ff2a6d"
-    },
-    "main": {
-      "anchor": "n",
-      "x_pct": 50,
-      "y_pct": 5,
-      "size_max": 68,
-      "size_min": 22,
-      "min_width": 460,
-      "max_width_pct": 72,
-      "radius": 34,
-      "pad": 48,
-      "logo_px": 76
-    },
-    "corner": {
-      "anchor": "se",
-      "x_pct": 98,
-      "y_pct": 95,
-      "size_max": 26,
-      "size_min": 14,
-      "min_width": 280,
-      "max_width_pct": 30,
-      "radius": 24,
-      "pad": 22,
-      "logo_px": 40
-    }
+    "main": {"anchor": "n", "x_pct": 50, "y_pct": 4, "size_max": 30, "size_min": 17, "min_width": 340,
+             "max_width_pct": 60, "radius": 26, "pad": 20},
+    "corner": {"anchor": "se", "x_pct": 99, "y_pct": 98, "size_max": 14, "size_min": 13, "min_width": 200,
+               "max_width_pct": 28, "radius": 20, "pad": 14}
   },
   "dev_overlay": {
     "port": 47635,

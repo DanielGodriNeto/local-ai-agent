@@ -168,7 +168,7 @@ def session(ui: overlay.Overlay, cfg: dict, blocks: Optional[Iterator[np.ndarray
     everything, including the voice."""
     v, cancel = cfg["voice"], cancel or threading.Event()
     try:
-        ui.status("OUVINDO", overlay.LISTEN)
+        ui.status("Ouvindo", overlay.LISTEN)
         sound = v.get("earcons", True)
         earcons.play("listen", sound)
         stt, decide, *extra = models() if models else (LazyWhisper(v["model"], v["language"]), preload_intent(cfg),
@@ -187,18 +187,18 @@ def session(ui: overlay.Overlay, cfg: dict, blocks: Optional[Iterator[np.ndarray
         threading.Thread(target=watch, daemon=True).start()
         text = listen(blocks or mic_blocks(stop), seg, stt, ui.text, v["partial_every_s"])
         if not text:
-            ui.status("NADA OUVIDO", overlay.IDLE)
+            ui.status("Nada ouvido", overlay.IDLE)
             earcons.play("error", sound)
             ui.text("Não ouvi nada.", overlay.IDLE)
             return ui.hold(1.5)
-        ui.status("DECIDINDO", overlay.IDLE)
+        ui.status("Pensando", overlay.IDLE)
         earcons.play("heard", sound)
         ui.text(text)
 
         def confirm(question: str) -> bool:
             ok = ui.ask(question)
             if ok:
-                ui.status("TRABALHANDO", overlay.IDLE)
+                ui.status("Trabalhando", overlay.IDLE)
             return ok
 
         streamed = []
@@ -215,7 +215,7 @@ def session(ui: overlay.Overlay, cfg: dict, blocks: Optional[Iterator[np.ndarray
         out = o.handle(text, cfg, decide=decide, confirm=confirm,
                        pick=lambda q, opts: ui.choose(q, opts), on_event=on_event, cancel=cancel).strip() or "Feito."
         HISTORY.append((text, out))
-        ui.status("PRONTO", overlay.GREEN)
+        ui.status("Pronto", overlay.GREEN)
         earcons.play("done", sound)
         ui.text(out)
         if voice and streamed:  # only the AI's answers are spoken, not preset results
@@ -225,7 +225,7 @@ def session(ui: overlay.Overlay, cfg: dict, blocks: Optional[Iterator[np.ndarray
                 pass
         ui.hold(4 if len(out) <= SHORT else None)
     except Exception as e:  # never leave the overlay stuck on screen
-        ui.status("ERRO", overlay.RED)
+        ui.status("Erro", overlay.RED)
         earcons.play("error", cfg.get("voice", {}).get("earcons", True))
         ui.text(f"{type(e).__name__}: {e}"[:300], overlay.RED)
         ui.hold(5)

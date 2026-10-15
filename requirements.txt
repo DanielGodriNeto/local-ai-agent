@@ -5,6 +5,7 @@ faster-whisper
 sounddevice
 pytest
 pillow
+PySide6-Essentials
 rapidocr
 # optional spoken answers (Kokoro). Its phonemizer and espeak-ng are GPL-3; on Python 3.14 add --ignore-requires-python
 # kokoro-onnx==0.6.1

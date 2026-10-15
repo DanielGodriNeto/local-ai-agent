@@ -120,8 +120,6 @@ class Models:
 
 
 def run_daemon() -> None:
-    import tkinter as tk
-
     import listen
     import orchestrator as o
     import overlay
@@ -132,8 +130,9 @@ def run_daemon() -> None:
         sock = socket.create_server(("127.0.0.1", PORT))
     except OSError:
         sys.exit("agentd ja esta rodando (ou a porta %d esta ocupada)" % PORT)
-    root = tk.Tk()
-    root.withdraw()
+    from PySide6.QtCore import QTimer
+    qt = overlay.app()
+    qt.setQuitOnLastWindowClosed(False)  # a session window closing must not end the daemon
     v = cfg["voice"]
     models = Models(lambda: (listen.LazyWhisper(v["model"], v["language"]), listen.preload_intent(cfg),
                              listen.speaker(cfg)),
@@ -141,8 +140,8 @@ def run_daemon() -> None:
     if d.get("mode", "leve") == "rapido":
         models()
 
-    def start(cancel: threading.Event) -> threading.Thread:  # Tk thread: windows are created here
-        ui = overlay.Overlay(master=root)
+    def start(cancel: threading.Event) -> threading.Thread:  # GUI thread: windows are created here
+        ui = overlay.Overlay()
         t = threading.Thread(target=listen.session, args=(ui, o.load_config()),
                              kwargs={"models": models, "cancel": cancel}, daemon=True)
         t.start()
@@ -157,16 +156,15 @@ def run_daemon() -> None:
                     agent.cancel.set()
                     stopping.set()
                     sock.close()
-                    root.after(300, root.destroy)
+                    QTimer.singleShot(300, qt.quit)
                     return
                 agent.toggle()
             if d.get("mode", "leve") == "leve":
                 models.unload_if_idle(agent.busy())
-        except Exception:  # a bad config or Tk error must not leave a daemon that says "ok" and does nothing
+        except Exception:  # a bad config or Qt error must not leave a daemon that says "ok" and does nothing
             import traceback
             with open(HOME / "agentd.log", "a", encoding="utf-8") as log:
                 traceback.print_exc(file=log)
-        root.after(100, pump)
 
     threading.Thread(target=serve, args=(sock, token(), commands.put), daemon=True).start()
     stopping = threading.Event()
@@ -174,8 +172,10 @@ def run_daemon() -> None:
     if wake.ready(cfg):  # always-listening mic only once the wake models are installed and wake.enabled
         threading.Thread(target=wake.listen_forever, args=(cfg, lambda: commands.put("toggle"), agent.busy, stopping),
                          daemon=True).start()
-    root.after(100, pump)
-    root.mainloop()
+    timer = QTimer()
+    timer.timeout.connect(pump)
+    timer.start(100)
+    qt.exec()
 
 
 # ---- client side (the hotkey) ----------------------------------------------------------------------------------------

@@ -22,6 +22,7 @@ def main() -> None:
     msg = wt.MSG()
     while user32.GetMessageW(ctypes.byref(msg), None, 0, 0) > 0:
         if msg.message == WM_HOTKEY:
+            user32.AllowSetForegroundWindow(-1)  # ASFW_ANY: lets the agent's question take keyboard focus
             threading.Thread(target=agentd.send, args=("toggle",), daemon=True).start()
 
 

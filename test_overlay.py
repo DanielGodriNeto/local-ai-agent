@@ -1,0 +1,75 @@
+import os
+import threading
+import time
+
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+from PySide6.QtCore import Qt  # noqa: E402
+from PySide6.QtGui import QKeyEvent  # noqa: E402
+from PySide6.QtWidgets import QPushButton  # noqa: E402
+
+import overlay  # noqa: E402
+
+UI = {"theme": "light", "accent": "blue", "text_scale": 1.0, "font": "",
+      "main": {"anchor": "n", "x_pct": 50, "y_pct": 4, "size_max": 30, "size_min": 17, "min_width": 340,
+               "max_width_pct": 60, "radius": 26, "pad": 20}}
+
+
+def ask_in_thread(fn, *args):
+    box = []
+    t = threading.Thread(target=lambda: box.append(fn(*args)), daemon=True)
+    t.start()
+    return t, box
+
+
+def pump_until(cond, timeout=5):
+    end = time.time() + timeout
+    while not cond() and time.time() < end:
+        overlay.app().processEvents()
+        time.sleep(0.01)
+    assert cond()
+
+
+def buttons(ov):
+    return [b for b in ov.buttons.findChildren(QPushButton) if b.isVisible()]
+
+
+def test_yes_no_buttons_answer_and_disappear():
+    ov = overlay.Overlay(UI)
+    t, box = ask_in_thread(ov.ask, "Continuar?")
+    pump_until(lambda: [b.text() for b in buttons(ov)] == ["Não", "Sim"])
+    buttons(ov)[1].click()
+    t.join(2)
+    assert box == [True]
+    pump_until(lambda: not ov.buttons.isVisible())
+    t, box = ask_in_thread(ov.ask, "De novo?")
+    pump_until(lambda: len(buttons(ov)) == 2)
+    buttons(ov)[0].click()
+    t.join(2)
+    assert box == [False]
+    ov.close()
+
+
+def test_choice_by_number_key_and_close_answers_none():
+    ov = overlay.Overlay(UI)
+    t, box = ask_in_thread(ov.choose, "Qual?", ["Chrome", "Firefox"])
+    pump_until(lambda: len(buttons(ov)) == 3)  # two options and Cancelar
+    ov._key(QKeyEvent(QKeyEvent.Type.KeyPress, Qt.Key.Key_2, Qt.KeyboardModifier.NoModifier, "2"))
+    t.join(2)
+    assert box == [1]
+    t, box = ask_in_thread(ov.choose, "Qual?", ["Chrome", "Firefox"])
+    pump_until(lambda: len(buttons(ov)) == 3)
+    ov.close()  # the hotkey or Esc: a pending question gets "no" at once, not after the timeout
+    pump_until(lambda: not t.is_alive())
+    assert box == [None]
+    assert ov.ask("depois de fechada?") is False
+
+
+def test_long_text_scrolls_inside_a_card_that_fits_the_screen():
+    ov = overlay.Overlay(UI)
+    ov.text("palavra " * 4000)
+    pump_until(lambda: ov.scroll.isVisible())
+    area = overlay.QGuiApplication.primaryScreen().availableGeometry()
+    assert ov.card.height() <= area.height() * 0.85
+    assert ov.body.height() > ov.scroll.height()  # the rest is a scroll away, not cut
+    ov.close()

@@ -2,11 +2,11 @@
 
 Press a key, speak, and a small local model decides what to do.
 
-1. **Voice**: hotkey → live transcription in a dark, cyberpunk-style overlay (faster-whisper, local).
+1. **Voice**: hotkey or "Hey Jarvis" → live transcription in a light pill at the top of the screen (faster-whisper, local). It follows the system theme, high contrast and "show animations" settings; questions come with buttons (Enter/Esc/1-9 work too).
 2. **Decision**: a local intent matcher ([multilingual-e5-small](https://huggingface.co/intfloat/multilingual-e5-small), int8 ONNX, ~190 MB RAM, ~5 ms per decision) compares what you said with example phrases of each preset. Questions, "stop/close" verbs, low scores and near-ties never run a preset: they go to the AI or ask you to pick.
 3. **Action**: an allowlisted *preset* runs locally (open browser, lock screen, launch a Steam game…). Anything else goes to **your own AI**, no API key: Claude Code, Codex or a local Ollama model (`brain.use`, default `auto` = first one installed). Short questions get a fast answer (Haiku on Claude); tasks that read files ask first. Answers stream in, and the AI remembers the conversation for 10 minutes (`brain.memory_idle_s`, RAM only).
-4. **Solution picker**: if the AI finds several distinct solutions it asks you to pick one (keys 1-9), then continues.
-5. **Dev overlay**: Claude Code hooks show live progress ("Editando app.py") in a screen corner.
+4. **Solution picker**: if the AI finds several distinct solutions it shows one button per solution (or keys 1-9), then continues.
+5. **Live Activity**: Claude Code hooks show live progress ("Editando app.py") in a small pill in a screen corner.
 
 Windows and Linux (Hyprland). The Linux scripts are untested on real hardware.
 
@@ -62,7 +62,7 @@ One file: defaults live in `config.default.json`; put only what you change in `c
 
 ## Appearance
 
-`python settings.py` opens a live-preview window: size, font, colors, max width, and you can **drag** the two overlays (main and corner) to position them. Saved to `config.json` (git-ignored).
+`python settings.py` opens the settings (General, Voice, Appearance): the AI to use, memory mode, language, spoken answers, wake word, theme, accent colour, text size and where the windows appear. Every change is saved at once to `config.json` (git-ignored). The UI is Qt (`PySide6-Essentials`, LGPL).
 
 ## Dev overlay (Claude Code hooks)
 
@@ -85,7 +85,3 @@ Merge [claude-hooks.example.json](claude-hooks.example.json) into your Claude Co
 python -m pytest -q
 python eval_intent.py # labelled phrases incl. stop verbs and misheard speech; must show 0 wrong presets
 ```
-
-## Notes
-
-`assets/logo_src.jpg` is the author's own mark; replace it with yours if you fork. Josefin Sans is under the SIL OFL (`fonts/OFL.txt`).
