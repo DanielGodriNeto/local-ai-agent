@@ -155,6 +155,7 @@ def run_daemon() -> None:
             while not commands.empty():
                 if commands.get() == "quit":
                     agent.cancel.set()
+                    stopping.set()
                     sock.close()
                     root.after(300, root.destroy)
                     return
@@ -168,6 +169,11 @@ def run_daemon() -> None:
         root.after(100, pump)
 
     threading.Thread(target=serve, args=(sock, token(), commands.put), daemon=True).start()
+    stopping = threading.Event()
+    import wake
+    if wake.ready(cfg):  # always-listening mic only once the wake models are installed and wake.enabled
+        threading.Thread(target=wake.listen_forever, args=(cfg, lambda: commands.put("toggle"), agent.busy, stopping),
+                         daemon=True).start()
     root.after(100, pump)
     root.mainloop()
 

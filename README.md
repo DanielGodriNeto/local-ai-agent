@@ -38,6 +38,16 @@ loaded for instant start. The conversation memory survives either way. `python a
   the hotkey or Esc cuts it. Uses ~430 MB while loaded; `leve` mode frees it when idle. Its phonemizer and espeak-ng
   are GPL-3 (installed by you, not shipped here).
 
+## Wake word
+
+`python wake.py` downloads three small models (~3.5 MB, sha256-checked); from then on the agent wakes when you say
+**"Hey Jarvis"**, no key needed. Your own phrase: `python wake.py --record "ola computador"` (say it 3 times), then set
+`"wake": {"phrase": "ola computador"}` in `config.json`. Turn it off with `"wake": {"enabled": false}`.
+
+The mic stays open while the agent waits, but audio is processed locally in 80 ms pieces and never stored or sent.
+It closes while a session runs. Idle cost measured: ~90 MB, ~4% of one CPU core. The "hey jarvis" model is
+openWakeWord's (CC BY-NC-SA 4.0: personal, non-commercial use); your own phrase uses only the Apache-2.0 parts.
+
 ## Screen reading
 
 Monitors are numbered: **1 = primary**, the rest left to right (`python monitors.py` lists them). Ask by voice:
