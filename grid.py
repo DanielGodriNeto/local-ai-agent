@@ -18,6 +18,7 @@ class Grid(QWidget):
                          | Qt.WindowType.WindowTransparentForInput | Qt.WindowType.WindowDoesNotAcceptFocus)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
+        self.setWindowTitle("agent-grid")  # Hyprland moves it by this title
         self.marker, self.accent = marker, QColor(overlay.palette(config.load()["ui"])["accent"])
         self.show()
         self.place(rect)
@@ -66,6 +67,8 @@ class Grid(QWidget):
 
 def logical(rect: tuple[int, int, int, int]) -> QRect:
     """Physical pixels -> Qt's. Each screen keeps its native top-left; inside it, sizes divide by its scale."""
+    if sys.platform != "win32":  # Hyprland: already layout pixels, and the compositor places the window
+        return QRect(*rect)
     x, y, w, h = rect
     screens = QGuiApplication.screens()
     s = next((s for s in screens if s.geometry().x() <= x < s.geometry().x() + s.geometry().width() * s.devicePixelRatio()

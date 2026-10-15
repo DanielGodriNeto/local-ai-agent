@@ -1,12 +1,14 @@
 """Voice accessibility: click things by name (Windows UI Automation), a number grid to click anywhere, and an AI
 fallback that finds the thing on an image of the window (it asks before sending, and again before clicking).
 
-Coordinates are physical pixels everywhere: UI Automation, the mouse and the grid windows (placed with SetWindowPos).
+Windows: physical pixels everywhere (UI Automation, the mouse, the grid windows). Hyprland: layout pixels.
 """
 import contextlib
 import json
 import os
 import re
+import subprocess
+import sys
 import threading
 import time
 from typing import Callable, Optional
@@ -138,11 +140,19 @@ def within(fn: Callable[[], list], seconds: float, cancel: threading.Event) -> O
     """fn() in a helper thread; None if it takes longer than `seconds` or the user cancels.
     ponytail: a stuck UI Automation call can't be aborted, so its thread is left to finish on its own."""
     box: list = []
-    worker = threading.Thread(target=lambda: box.append(fn()), daemon=True)
+
+    def work():
+        try:
+            box.append(fn())
+        except Exception as e:  # noqa: BLE001 - re-raised below, in the caller's thread
+            box.append(e)
+    worker = threading.Thread(target=work, daemon=True)
     worker.start()
     end = time.monotonic() + seconds
     while worker.is_alive() and not cancel.is_set() and time.monotonic() < end:
         worker.join(0.05)
+    if box and isinstance(box[0], Exception):
+        raise box[0]
     return box[0] if box else None
 
 
@@ -150,7 +160,7 @@ def run(cmd: dict, cfg: dict, desk, hear: Callable[[str], Optional[str]], confir
         pick: Callable[[str, list], Optional[int]], cancel: threading.Event,
         ask_ai: Optional[Callable[[str, str], str]] = None) -> str:
     if desk is None:
-        return "Clicar por voz ainda só funciona no Windows."
+        return "Clicar por voz só funciona no Windows e no Hyprland."
     t = desk.target()
     if t and desk.elevated_target(t):
         return "Essa janela é de administrador; não consigo clicar nela."
@@ -459,3 +469,163 @@ def _elevated(pid: int) -> Optional[bool]:
             k.CloseHandle(token)
     finally:
         k.CloseHandle(ctypes.c_void_p(proc))
+
+
+# ---- Linux (Hyprland) adapter: hyprctl, AT-SPI, grim, ydotool ----
+# ponytail: written against the docs and unit-tested with fakes only, never on a real Hyprland session.
+# Coordinates here are Hyprland layout pixels (logical), the space hyprctl, grim -g and movecursor all share.
+
+def desk(gui: Callable[[Callable[[], None]], None], owner=None):
+    """The adapter for this desktop, or None where clicking by voice is not supported."""
+    if sys.platform == "win32":
+        return Desk(gui, owner)
+    if os.environ.get("HYPRLAND_INSTANCE_SIGNATURE"):
+        return HyprDesk(gui, owner)
+    return None
+
+
+def _sh(argv: list[str]) -> str:
+    return subprocess.run(argv, capture_output=True, text=True, timeout=5, check=True).stdout
+
+
+def hypr_window(c: dict) -> dict:
+    """A hyprctl client -> the target dict the flows use."""
+    return {"hwnd": c["address"], "title": c.get("title", ""), "rect": (*c["at"], *c["size"]), "pid": c.get("pid", 0)}
+
+
+def hypr_pick(active: dict, clients: list, me: int, shown: set) -> Optional[dict]:
+    """The focused window; when that is ours (the text box), the most recently focused one that is not, on a workspace
+    some monitor shows now (a window elsewhere would be captured and clicked through whatever covers it)."""
+    def usable(c):
+        return c.get("address") and c.get("mapped", True) and not c.get("hidden") and c.get("pid") != me \
+            and min(c.get("size", (0, 0))) > 0
+    if usable(active):
+        return hypr_window(active)
+    rest = sorted((c for c in clients if usable(c) and c.get("workspace", {}).get("id") in shown), key=lambda c: c.get("focusHistoryID", 1 << 30))
+    return hypr_window(rest[0]) if rest else None
+
+
+def hypr_monitor(monitors: list, point: tuple[int, int]) -> Rect:
+    """The monitor holding point, in layout pixels (a scaled or rotated monitor covers its size / scale)."""
+    def size(m):
+        w, h = m["width"] / m.get("scale", 1), m["height"] / m.get("scale", 1)
+        return (h, w) if m.get("transform", 0) % 2 else (w, h)
+    for m in monitors:
+        w, h = size(m)
+        if m["x"] <= point[0] < m["x"] + w and m["y"] <= point[1] < m["y"] + h:
+            return m["x"], m["y"], round(w), round(h)
+    m = monitors[0]
+    return m["x"], m["y"], *map(round, size(m))
+
+
+def _root_owned(pid: int) -> Optional[bool]:
+    try:
+        with open(f"/proc/{pid}/status") as f:
+            uid = next(line.split()[1] for line in f if line.startswith("Uid:"))
+        return uid == "0"
+    except (OSError, StopIteration, IndexError):
+        return None
+
+
+class HyprDesk:
+    """Hyprland: the target and monitors from hyprctl, controls from AT-SPI, the window image from grim, clicks from
+    ydotool (needs ydotoold running). The grid windows are moved by hyprctl, since Wayland apps can't place themselves."""
+    GRID = "title:^(agent-grid)$"
+    BUTTONS = {"left": "0xC0", "right": "0xC1"}
+    MAX_NODES = 5000  # ponytail: a whole-tree AT-SPI walk; a web page past this many nodes is cut short
+
+    def __init__(self, gui, owner=None, sh: Callable[[list[str]], str] = _sh):
+        self.gui, self.owner, self.sh = gui, owner, sh
+
+    def _json(self, *what: str):
+        return json.loads(self.sh(["hyprctl", *what, "-j"]) or "null")
+
+    def target(self) -> Optional[dict]:
+        shown = {m.get("activeWorkspace", {}).get("id") for m in self._json("monitors") or []}
+        return hypr_pick(self._json("activewindow") or {}, self._json("clients") or [], os.getpid(), shown)
+
+    def still(self, t: dict) -> bool:
+        now = self.target()
+        return bool(now) and now["hwnd"] == t["hwnd"] and now["rect"] == t["rect"]
+
+    def elevated_target(self, t: dict) -> bool:
+        return os.geteuid() != 0 and _root_owned(t["pid"]) is not False
+
+    def monitor(self, t: Optional[dict]) -> Rect:
+        if t:
+            x, y, w, h = t["rect"]
+            point = (x + w // 2, y + h // 2)
+        else:
+            c = self._json("cursorpos")
+            point = (c["x"], c["y"])
+        return hypr_monitor(self._json("monitors"), point)
+
+    def find(self, t: dict) -> list[dict]:
+        """Showing, enabled controls of the window's app. Wayland apps only know where things are inside their own
+        window, so AT-SPI is asked in window coordinates and the window's corner is added."""
+        import gi
+        gi.require_version("Atspi", "2.0")
+        from gi.repository import Atspi
+        top = Atspi.get_desktop(0)
+        apps = [top.get_child_at_index(i) for i in range(top.get_child_count())]
+        app = next((a for a in apps if a and a.get_process_id() == t["pid"]), None)
+        if not app:
+            return []
+        frames = [app.get_child_at_index(i) for i in range(app.get_child_count())]
+        # only the window by its title: another window's controls would get this one's corner and wrong places
+        stack = [f for f in frames if f and f.get_name() == t["title"]]
+        x0, y0 = t["rect"][:2]
+        items, seen = [], 0
+        while stack and seen < self.MAX_NODES:
+            node = stack.pop()
+            seen += 1
+            states = node.get_state_set()
+            if not states.contains(Atspi.StateType.SHOWING):
+                continue
+            stack.extend(c for c in (node.get_child_at_index(i) for i in range(node.get_child_count())) if c)
+            e = node.get_extents(Atspi.CoordType.WINDOW)
+            if node.get_name() and states.contains(Atspi.StateType.ENABLED) and e.width > 0 and e.height > 0:
+                items.append({"name": node.get_name(), "type": node.get_localized_role_name() or "",
+                              "rect": (x0 + e.x, y0 + e.y, e.width, e.height)})
+        return items
+
+    def capture(self, t: dict):
+        """The window's area at scale 1, so image pixels are layout pixels. grim sees what covers the window too."""
+        import io
+        from PIL import Image
+        x, y, w, h = t["rect"]
+        png = subprocess.run(["grim", "-s", "1", "-g", f"{x},{y} {w}x{h}", "-"], capture_output=True, timeout=10,
+                             check=True).stdout
+        return Image.open(io.BytesIO(png)).convert("RGB")
+
+    def click(self, point: tuple[int, int], button: str) -> None:
+        self.sh(["hyprctl", "dispatch", "movecursor", str(point[0]), str(point[1])])
+        argv = ["ydotool", "click"] + (["--repeat", "2", "--next-delay", "80"] if button == "double" else [])
+        self.sh(argv + [self.BUTTONS.get(button, "0xC0")])
+
+    def _place(self, rect: Rect) -> None:
+        x, y, w, h = rect
+        for _ in range(20):  # the window maps a moment after Qt shows it
+            if any(c.get("title") == "agent-grid" for c in self._json("clients") or []):
+                break
+            time.sleep(0.05)
+        self.sh(["hyprctl", "--batch", f"dispatch setfloating {self.GRID} ; "
+                 f"dispatch resizewindowpixel exact {w} {h},{self.GRID} ; "
+                 f"dispatch movewindowpixel exact {x} {y},{self.GRID}"])
+
+    def grid(self, rect: Rect) -> "_Shown":
+        return _HyprShown(self, rect, False)
+
+    def marker(self, point: tuple[int, int]) -> "_Shown":
+        return _HyprShown(self, (point[0] - 24, point[1] - 24, 48, 48), True)
+
+
+class _HyprShown(_Shown):
+    def __init__(self, d: HyprDesk, rect: Rect, marker: bool):
+        super().__init__(d.gui, rect, marker, d.owner)
+        self.d = d
+        d._place(rect)
+
+    def move(self, rect: Rect) -> None:
+        super().move(rect)
+        self.d._place(rect)

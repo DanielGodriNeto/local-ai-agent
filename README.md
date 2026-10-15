@@ -61,7 +61,7 @@ Monitors are numbered: **1 = primary**, the rest left to right (`python monitors
 unless you ask. You always confirm first; the confirmation shows the text that would leave your PC. Screen content is
 passed to the AI as untrusted data (read-only tools, image saved only to a private temp folder and deleted).
 
-## Click by voice (Windows)
+## Click by voice (Windows, Hyprland)
 
 - "clica em Salvar", "clique duplo em Documentos", "clique com o botão direito em Lixeira": finds the control by its
   name in the window you are using (UI Automation) and clicks it. Several matches: it asks which one.
@@ -71,6 +71,8 @@ passed to the AI as untrusted data (read-only tools, image saved only to a priva
   its centre, "clica no 5" to click a cell at once, "cancela" to close. Works with the text box too (Win+F11).
 - Admin windows are refused (Windows would silently drop the click), and nothing is clicked if the window moved or
   changed in the meantime.
+- Hyprland (untested on a real session): needs `hyprctl`, `grim`, `ydotool` with `ydotoold` running, and AT-SPI
+  (`python-gobject`, and apps with accessibility on). Windows owned by root are refused.
 
 ## Config
 

@@ -253,8 +253,7 @@ def session(ui: overlay.Overlay, cfg: dict, blocks: Optional[Iterator[np.ndarray
             return listen(blocks or mic_blocks(stop), segmenter(), stt, ui.text, v["partial_every_s"])
 
         if (cmd := access.parse(text)):  # voice accessibility: no AI unless nothing matches, never in the background
-            desk = access.Desk(ui.gui, ui.win) if sys.platform == "win32" else None
-            out = access.run({**cmd, "said": text}, cfg, desk, hear, confirm, lambda q, opts: ui.choose(q, opts), cancel)
+            out = access.run({**cmd, "said": text}, cfg, access.desk(ui.gui, ui.win), hear, confirm, lambda q, opts: ui.choose(q, opts), cancel)
             ui.status("Pronto", overlay.GREEN)
             earcons.play("done", sound)
             ui.text(out)

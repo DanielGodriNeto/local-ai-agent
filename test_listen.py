@@ -182,7 +182,7 @@ def test_typed_grid_session_uses_the_text_box_for_each_round_and_never_the_ai(mo
             return answers.pop(0)
 
     monkeypatch.setattr(L.o, "handle", lambda *a, **k: (_ for _ in ()).throw(AssertionError("went to the AI")))
-    monkeypatch.setattr(L.access, "Desk", lambda *_a: desk)
+    monkeypatch.setattr(L.access, "desk", lambda *_a: desk)
     monkeypatch.setattr(L.sys, "platform", "win32")
     monkeypatch.setattr(L.access.orchestrator, "log", lambda entry: None)
     ui = GridUI()

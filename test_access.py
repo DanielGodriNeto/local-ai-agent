@@ -144,6 +144,16 @@ def test_a_window_too_slow_to_list_its_controls_suggests_the_grid(monkeypatch):
     assert "grade" in out and desk.clicks == [] and not asked
 
 
+def test_a_failing_search_reports_its_own_error():
+    def broken():
+        raise ImportError("gi")
+    try:
+        access.within(broken, 1, threading.Event())
+    except ImportError:
+        return
+    raise AssertionError("the error was swallowed")
+
+
 def test_elevated_or_changed_window_is_never_clicked():
     out, _ = run({"do": "click", "name": "salvar", "button": "left"}, FakeDesk([ITEM], elevated=True))
     assert "administrador" in out
