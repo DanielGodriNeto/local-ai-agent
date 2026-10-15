@@ -1,0 +1,79 @@
+name: refresh lock
+
+# Monthly: re-resolve requirements.in to the newest versions, test them on Windows and Linux, and open a PR.
+# (Dependabot can't update a uv lock yet, dependabot-core#10478.) A PR opened with GITHUB_TOKEN doesn't run CI,
+# so the tests run here, before the PR exists.
+on:
+  schedule:
+    - cron: "0 9 1 * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  compile:
+    runs-on: ubuntu-latest
+    outputs:
+      changed: ${{ steps.diff.outputs.changed }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+      - run: pip install uv==0.13.1
+      - run: uv pip compile requirements.in --universal --python-version 3.11 --generate-hashes -o requirements.txt --upgrade -q
+      - id: diff
+        run: echo "changed=$(git diff --quiet requirements.txt && echo no || echo yes)" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lock
+          path: requirements.txt
+
+  test:
+    needs: compile
+    if: needs.compile.outputs.changed == 'yes'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      QT_QPA_PLATFORM: offscreen
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v4
+        with:
+          name: lock
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+      - name: System libraries (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libportaudio2 libegl1 libgl1 libxkbcommon0 libfontconfig1 libdbus-1-3
+      - run: pip install --require-hashes -r requirements.txt
+      - run: python -m pytest -q
+
+  pr:
+    needs: [compile, test]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v4
+        with:
+          name: lock
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          branch="deps/refresh-lock-$(date +%Y-%m)"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c "$branch"
+          git commit -am "chore(deps): refresh the dependency lock"
+          git push -f origin "$branch"
+          gh pr create --base master --head "$branch" --title "chore(deps): refresh the dependency lock" \
+            --body "Monthly lock refresh. Tests already passed on Windows and Linux in run ${{ github.run_id }}." \
+            || echo "PR already open"
