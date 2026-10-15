@@ -13,7 +13,8 @@ from typing import Optional
 
 from PySide6.QtCore import QEasingCurve, QObject, QPoint, QPropertyAnimation, QRectF, Qt, QVariantAnimation, Signal, Slot
 from PySide6.QtGui import QColor, QCursor, QFont, QFontDatabase, QFontMetrics, QGuiApplication, QPainter, QPen
-from PySide6.QtWidgets import (QApplication, QGraphicsDropShadowEffect, QHBoxLayout, QLabel, QPushButton, QScrollArea,
+from PySide6.QtWidgets import (QApplication, QGraphicsDropShadowEffect, QHBoxLayout, QLabel, QLineEdit, QPushButton,
+                               QScrollArea,
                                QVBoxLayout, QWidget)
 
 import config
@@ -39,6 +40,18 @@ PALETTES = {
 def app() -> QApplication:
     """The one QApplication of this process (created on first use)."""
     return QApplication.instance() or QApplication(sys.argv[:1])
+
+
+def _anchor() -> QWidget:
+    """Never shown. Overlay windows are its children, so Qt owns them: Python's garbage collector, which may run on
+    any thread, never destroys a widget (that must happen on the GUI thread, via deleteLater)."""
+    global _ANCHOR
+    if _ANCHOR is None:
+        _ANCHOR = QWidget()
+    return _ANCHOR
+
+
+_ANCHOR: Optional[QWidget] = None
 
 
 def text_size(s: str, lo: int, hi: int) -> int:
@@ -85,11 +98,12 @@ def family(ui: dict) -> str:
     return next((f for f in (ui.get("font", ""), *FONTS) if f and f in have), app().font().family())
 
 
-class _Bridge(QObject):
+class Bridge(QObject):
+    """bridge.call.emit(fn) runs fn on the GUI thread, from any thread."""
     call = Signal(object)
 
-    def __init__(self):
-        super().__init__()
+    def __init__(self, parent: Optional[QObject] = None):
+        super().__init__(parent)
         self.call.connect(self._run)
 
     @Slot(object)
@@ -152,7 +166,7 @@ class _Card(QWidget):
 
 class _Window(QWidget):
     def __init__(self, owner: "Overlay"):
-        super().__init__(None, Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint
+        super().__init__(_anchor(), Qt.WindowType.Window | Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint
                          | Qt.WindowType.Tool)
         self.owner = owner
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
@@ -171,25 +185,33 @@ class Overlay:
         self.ui, self.kind = ui or config.load()["ui"], kind
         self.closed = threading.Event()
         self._label, self._fg, self._state, self._tag = "", "fg", IDLE, ""
-        self._ask: Optional[list] = None  # [] = yes/no question, [options] = choice; None = not asking
+        self._ask = None  # [] = yes/no question, [options] = choice, "input" = typed text; None = not asking
+        self._built = None  # the _ask the current buttons were made for
+        self._expandable = False  # a corner pill that opens into the full card when clicked
         self._answer = None  # (Event, [value]) while a question/choice is pending
-        self._choices, self._shown, self._anims = 0, False, []
-        self._bridge = _Bridge()
+        self._choices, self._shown, self._anims, self._default = 0, False, [], None
         self._build()
+        self._bridge = Bridge(self.win)
         self._draw()
 
     # ---- thread-safe API ----
+    def _do(self, fn) -> None:
+        try:
+            self._bridge.call.emit(fn)
+        except RuntimeError:  # the window is already gone (closed and deleted): nothing left to update
+            pass
+
     def status(self, label: str, state: str = IDLE) -> None:
         def apply():
             self._state, self._tag = state, label
             self._draw()
-        self._bridge.call.emit(apply)
+        self._do(apply)
 
     def text(self, s: str, color: str = "fg") -> None:
         def apply():
             self._label, self._fg = s, color
             self._draw()
-        self._bridge.call.emit(apply)
+        self._do(apply)
 
     def ask(self, question: str, timeout: float = 60) -> bool:
         return bool(self._wait(question, [], timeout))
@@ -199,6 +221,18 @@ class Overlay:
         answer too."""
         got = self._wait(question, options[:9], timeout)  # keys 1-9, and the card stays on screen
         return got if isinstance(got, int) and not isinstance(got, bool) else None
+
+    def prompt(self, question: str, timeout: float = 300) -> Optional[str]:
+        """A text box: Enter sends, Esc cancels. Returns the text, or None."""
+        got = self._wait(question, "input", timeout)
+        return got.strip() if isinstance(got, str) and got.strip() else None
+
+    def to_corner(self) -> None:
+        """Shrink into the corner pill (a long task moving to the background); a click opens it again."""
+        def apply():
+            self.kind, self._expandable = "corner", True
+            self._draw()
+        self._do(apply)
 
     def resolve_choice(self, index: int) -> None:
         if self._answer:
@@ -211,7 +245,7 @@ class Overlay:
         self.close()
 
     def close(self) -> None:
-        self._bridge.call.emit(self._close)
+        self._do(self._close)
 
     def run(self) -> None:
         app().exec()
@@ -221,7 +255,7 @@ class Overlay:
         def apply():
             self.ui = ui
             self._draw()
-        self._bridge.call.emit(apply)
+        self._do(apply)
 
     # ---- internals (GUI thread) ----
     def _build(self) -> None:
@@ -263,9 +297,10 @@ class Overlay:
         for wid in (self.cap, self.scroll, self.buttons):
             col.addWidget(wid)
 
-    def _wait(self, question: str, options: list, timeout: float):
+    def _wait(self, question: str, options, timeout: float):
         ev, box = threading.Event(), [None]
-        self._answer, self._choices = (ev, box), len(options)  # set now, so a close before the redraw answers no
+        # set now, so a close before the redraw answers no
+        self._answer, self._choices = (ev, box), len(options) if isinstance(options, list) else 0
         if self.closed.is_set():  # already closed (cancelled): nobody can answer
             self._answer, self._choices = None, 0
             return None
@@ -278,18 +313,18 @@ class Overlay:
             self.win.activateWindow()
             self.win.raise_()
             self._default.setFocus()
-        self._bridge.call.emit(show)
+        self._do(show)
         ev.wait(timeout)
         self._answer, self._choices = None, 0
 
         def done():
             self._ask = None
             self._draw()
-        self._bridge.call.emit(done)
+        self._do(done)
         return box[0]
 
     def _reply(self, value) -> None:
-        if self._answer and (value is None or self._choices == 0):
+        if self._answer and not self._answer[0].is_set() and (value is None or self._choices == 0):
             self._answer[1][0] = value
             self._answer[0].set()
 
@@ -299,12 +334,18 @@ class Overlay:
             self._reply(None) if self._answer else self._close()
         elif key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
             focus = self.win.focusWidget()
-            focus.click() if isinstance(focus, QPushButton) else self._reply(True)
+            if isinstance(focus, QPushButton):
+                focus.click()
+            elif not isinstance(focus, QLineEdit):  # the text box sends on its own
+                self._reply(True)
         elif self._choices and digit.isdigit() and 1 <= int(digit) <= self._choices:
             self.resolve_choice(int(digit) - 1)
 
     def _click(self) -> None:
-        if not self._answer:
+        if self._expandable and self.kind == "corner":
+            self.kind = "main"
+            self._draw()
+        elif not self._answer:
             self._close()
 
     def _close(self) -> None:
@@ -314,9 +355,10 @@ class Overlay:
         self._reply(None)  # a pending question gets "no", never a wait until timeout
         fade = self._animate(b"windowOpacity", self.win.windowOpacity(), 0.0, 140)
         fade.finished.connect(self.win.close)
+        fade.finished.connect(self.win.deleteLater)  # destroyed here, on the GUI thread
 
     def _animate(self, prop: bytes, start, end, ms: int) -> QPropertyAnimation:
-        a = QPropertyAnimation(self.win, prop)
+        a = QPropertyAnimation(self.win, prop, self.win)
         a.setStartValue(start)
         a.setEndValue(end)
         a.setDuration(ms)
@@ -326,6 +368,9 @@ class Overlay:
         return a
 
     def _buttons(self, p: dict, font: str) -> None:
+        if self._built is self._ask:  # streamed text redraws often: keep the buttons (and what was typed)
+            return
+        self._built = self._ask
         while self.button_box.count():
             self.button_box.takeAt(0).widget().deleteLater()
         if self._ask is None:
@@ -336,7 +381,18 @@ class Overlay:
                 f"QPushButton:focus {{ border-color: {QColor(p['accent']).lighter(140).name()}; }}")
         quiet = "background: rgba(%d,%d,%d,%d); color: %s;" % (*p["button"], p["fg"])
         loud = f"background: {p['accent']}; color: white; font-weight: 600;"
-        if not self._ask:
+        if self._ask == "input":
+            box = self._default = QLineEdit()
+            box.setPlaceholderText("Escreva e tecle Enter")
+            box.setAccessibleName("Pedido")
+            box.setMinimumWidth(round(420 * self.ui.get("text_scale", 1.0)))
+            box.setStyleSheet(f"QLineEdit {{ font-family: '{font}'; font-size: {round(16 * self.ui.get('text_scale', 1.0))}px; "
+                              f"color: {p['fg']}; background: rgba(%d,%d,%d,%d); border: 2px solid transparent; "
+                              f"border-radius: 10px; padding: 8px 12px; }} QLineEdit:focus {{ border-color: {p['accent']}; }}"
+                              % p["button"])
+            box.returnPressed.connect(lambda: self._reply(box.text()))
+            self.button_box.addWidget(box)
+        elif not self._ask:
             holder = QWidget()
             row = QHBoxLayout(holder)
             row.setContentsMargins(0, 0, 0, 0)
@@ -359,6 +415,8 @@ class Overlay:
             cancel.setStyleSheet(base + f"QPushButton {{ background: transparent; color: {p['muted']}; }}")
             cancel.clicked.connect(lambda: self._reply(None))
             self.button_box.addWidget(cancel)
+        for i in range(self.button_box.count()):  # now, not on the next event loop turn: the size depends on them
+            self.button_box.itemAt(i).widget().show()
         self.buttons.show()
 
     def _draw(self) -> None:
@@ -367,7 +425,7 @@ class Overlay:
             return
         p, k, scale = palette(self.ui), self.ui[self.kind], self.ui.get("text_scale", 1.0)
         fam, asking = family(self.ui), self._ask is not None
-        reading = asking or len(self._label) > LONG
+        reading = asking or (len(self._label) > LONG and self.kind == "main")
         self.card.fill, self.card.line = QColor(*p["surface"]), QColor(*p["line"])
         self.card.line_w = 2.0 if p["hc"] else 1.0
         self.dot.set(p.get(self._state, self._state), self._state in (LISTEN, IDLE) and not reduced_motion())
@@ -380,7 +438,10 @@ class Overlay:
         font = QFont(fam, round(size), QFont.Weight.Normal if reading else QFont.Weight.Medium)
         self.body.setFont(font)
         self.body.setStyleSheet(f"color: {p.get(self._fg, p['fg'])};")
-        self.body.setText(self._label)
+        shown = self._label
+        if self.kind == "corner" and (len(shown) > 60 or "\n" in shown):
+            shown = shown.split("\n")[0][:60].rstrip(" .") + "…"  # a pill holds one line; a click opens the rest
+        self.body.setText(shown)
         self.body.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse if reading and not asking
                                           else Qt.TextInteractionFlag.NoTextInteraction)
         self.scroll.setVisible(bool(self._label))
@@ -395,13 +456,14 @@ class Overlay:
         max_w = int(area.width() * k["max_width_pct"] / 100)
         if reading:
             max_w = min(max_w, fm.horizontalAdvance("0" * 70) + side)
-        natural = max([fm.horizontalAdvance(line) + 6 for line in self._label.split("\n")]
+        natural = max([fm.horizontalAdvance(line) + 6 for line in self.body.text().split("\n")]
                       + [QFontMetrics(cap_font).horizontalAdvance(self._tag) + 2, self.buttons.sizeHint().width()
                          if self._ask is not None else 0])
         w = min(max_w, max(k["min_width"] if self._label else 0, natural + side))
         inner = w - side
         body_h = self.body.heightForWidth(inner) if self._label else 0
-        limit = int(area.height() * 0.8) - (self.buttons.sizeHint().height() if self._ask is not None else 0)
+        limit = (int(area.height() * 0.8) - 2 * pad - (QFontMetrics(cap_font).height() + 6 if self._tag else 0)
+                 - (self.buttons.sizeHint().height() + 6 if self._ask is not None else 0))  # the whole card fits
         self.scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded if body_h > limit
                                                else Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.scroll.setFixedSize(inner, max(1, min(body_h, limit)))

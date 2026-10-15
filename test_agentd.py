@@ -117,3 +117,24 @@ def test_closing_the_overlay_answers_no_at_once():
     assert out == [False] and time.time() - started < 1
     started = time.time()
     assert ui.ask("Depois de fechado?", timeout=10) is False and time.time() - started < 1  # cancelled earlier
+
+
+def test_a_detached_task_keeps_running_while_a_new_session_starts():
+    started = []
+
+    def start(cancel, **kw):
+        started.append(kw)
+        t = threading.Thread(target=cancel.wait, args=(5,), daemon=True)
+        t.start()
+        return t
+
+    agent = agentd.Agent(start)
+    agent.toggle(typed=True)
+    first = agent.cancel
+    agent.detach(first)
+    assert not agent.busy()  # the hotkey and the wake word are free again
+    assert agent.toggle() == "start" and not first.is_set() and started == [{"typed": True}, {}]
+    agent.detach(first)  # a stale detach from the old session changes nothing
+    assert agent.busy()
+    agent.cancel_background()
+    assert first.is_set() and not agent.cancel.is_set()

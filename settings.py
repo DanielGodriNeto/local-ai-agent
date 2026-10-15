@@ -75,6 +75,35 @@ def style(p: dict) -> str:
     """
 
 
+def group(rows: list[tuple[str, QWidget]]) -> QFrame:
+    box = QFrame()
+    box.setObjectName("group")
+    col = QVBoxLayout(box)
+    col.setContentsMargins(14, 4, 14, 4)
+    col.setSpacing(0)
+    for i, (label, control) in enumerate(rows):
+        if i:
+            sep = QFrame()
+            sep.setObjectName("sep")
+            col.addWidget(sep)
+        line = QHBoxLayout()
+        line.setContentsMargins(0, 8, 0, 8)
+        name = QLabel(label)
+        name.setBuddy(control)
+        control.setAccessibleName(label)
+        line.addWidget(name, 1)
+        line.addWidget(control)
+        col.addLayout(line)
+    return box
+
+
+def note(text: str) -> QLabel:
+    n = QLabel(text)
+    n.setObjectName("note")
+    n.setWordWrap(True)
+    return n
+
+
 class Settings(QWidget):
     def __init__(self):
         overlay.app()
@@ -110,33 +139,6 @@ class Settings(QWidget):
             col.addWidget(part)
         col.addStretch()
         return page
-
-    def _group(self, rows: list[tuple[str, QWidget]]) -> QFrame:
-        box = QFrame()
-        box.setObjectName("group")
-        col = QVBoxLayout(box)
-        col.setContentsMargins(14, 4, 14, 4)
-        col.setSpacing(0)
-        for i, (label, control) in enumerate(rows):
-            if i:
-                sep = QFrame()
-                sep.setObjectName("sep")
-                col.addWidget(sep)
-            line = QHBoxLayout()
-            line.setContentsMargins(0, 8, 0, 8)
-            name = QLabel(label)
-            name.setBuddy(control)
-            control.setAccessibleName(label)
-            line.addWidget(name, 1)
-            line.addWidget(control)
-            col.addLayout(line)
-        return box
-
-    def _note(self, text: str) -> QLabel:
-        n = QLabel(text)
-        n.setObjectName("note")
-        n.setWordWrap(True)
-        return n
 
     def _combo(self, options: dict, current: str, on: Callable[[str], None]) -> QComboBox:
         box = QComboBox()
@@ -175,30 +177,32 @@ class Settings(QWidget):
     def _general(self) -> list:
         b, d = self.cfg["brain"], self.cfg["daemon"]
         return [
-            self._group([
+            group([
                 ("Inteligência", self._combo(BRAINS, b["use"], lambda v: self._save("brain", "use", v))),
                 ("Memória", self._combo({"leve": "Leve (libera após 5 min parado)", "rapido": "Rápida (sempre pronta)"},
                                         d.get("mode", "leve"), lambda v: self._save("daemon", "mode", v))),
+                ("Avisar quando uma tarefa longa terminar", self._check(self.cfg["ui"].get("notify", True),
+                                                                        lambda v: self._save("ui", "notify", v))),
             ]),
-            self._note("Nenhuma chave de API: o assistente usa o login que você já tem no Claude Code ou Codex, "
+            note("Nenhuma chave de API: o assistente usa o login que você já tem no Claude Code ou Codex, "
                        "ou um modelo Ollama no seu PC. Memória vale depois de reiniciar o assistente."),
         ]
 
     def _voice(self) -> list:
         v, w = self.cfg["voice"], self.cfg["wake"]
         return [
-            self._group([
+            group([
                 ("Idioma", self._combo(LANGUAGES, v["language"], lambda x: self._save("voice", "language", x))),
                 ("Falar as respostas", self._check(v.get("tts", True), lambda x: self._save("voice", "tts", x))),
                 ("Velocidade da fala", self._slider(70, 140, v.get("speed", 1.0),
                                                     lambda x: self._save("voice", "speed", round(x, 2)))),
                 ("Sons de aviso", self._check(v.get("earcons", True), lambda x: self._save("voice", "earcons", x))),
             ]),
-            self._group([
+            group([
                 (f"Ativar dizendo “{w['phrase']}”", self._check(w["enabled"],
                                                                  lambda x: self._save("wake", "enabled", x))),
             ]),
-            self._note('Outra frase: python wake.py --record "sua frase". Voz e ativação valem depois de reiniciar '
+            note('Outra frase: python wake.py --record "sua frase". Voz e ativação valem depois de reiniciar '
                        "o assistente. O áudio nunca sai do PC."),
         ]
 
@@ -224,20 +228,20 @@ class Settings(QWidget):
         preview = QPushButton("Mostrar exemplo")
         preview.clicked.connect(self._preview)
         return [
-            self._group([
+            group([
                 ("Tema", self._combo(THEMES, ui.get("theme", "auto"), lambda x: self._look_set("theme", x))),
                 ("Cor de destaque", swatches),
                 ("Tamanho do texto", self._slider(80, 160, ui.get("text_scale", 1.0),
                                                   lambda x: self._look_set("text_scale", round(x, 2)))),
             ]),
-            self._group([
+            group([
                 ("Janela principal", self._combo({k: k for k in POSITIONS}, where,
                                                  lambda x: self._place("main", POSITIONS[x]))),
                 ("Atividade em andamento", self._combo({k: k for k in CORNERS}, corner,
                                                        lambda x: self._place("corner", CORNERS[x]))),
                 ("", preview),
             ]),
-            self._note("Respeita o modo de alto contraste e a opção “Mostrar animações” do sistema."),
+            note("Respeita o modo de alto contraste e a opção “Mostrar animações” do sistema."),
         ]
 
     def _look_set(self, key: str, value) -> None:

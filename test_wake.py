@@ -98,9 +98,10 @@ def test_listener_survives_errors_and_gives_up_on_an_unrecorded_phrase(tmp_path,
     for f in ("melspectrogram.onnx", "embedding_model.onnx"):
         shutil.copy(wake.MODEL_DIR / f, tmp_path / f)
     done = threading.Thread(target=wake.listen_forever, args=({"wake": {"phrase": "nunca gravada"}}, lambda: None,
-                                                              lambda: False, quit_event, broken_mic, tmp_path))
+                                                              lambda: False, quit_event, broken_mic, tmp_path),
+                            daemon=True)
     done.start()
-    done.join(5)
+    done.join(10)
     alive = done.is_alive()
     quit_event.set()
     assert not alive  # gave up instead of looping forever

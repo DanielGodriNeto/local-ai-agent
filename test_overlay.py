@@ -81,3 +81,33 @@ def test_ai_text_is_shown_as_plain_text_never_markup():
     pump_until(lambda: ov.body.text().startswith("<b>"))
     assert ov.body.textFormat() == Qt.TextFormat.PlainText and ov.cap.textFormat() == Qt.TextFormat.PlainText
     ov.close()
+
+
+def test_text_box_sends_on_enter_and_esc_cancels():
+    ov = overlay.Overlay(UI)
+    t, box = ask_in_thread(ov.prompt, "O que você precisa?")
+    pump_until(lambda: isinstance(ov._default, overlay.QLineEdit) and ov._default.isVisible())
+    ov._default.setText("  abre o navegador  ")
+    ov._default.returnPressed.emit()
+    ov._key(QKeyEvent(QKeyEvent.Type.KeyPress, Qt.Key.Key_Return, Qt.KeyboardModifier.NoModifier))  # no override
+    t.join(2)
+    assert box == ["abre o navegador"]
+    t, box = ask_in_thread(ov.prompt, "De novo?")
+    pump_until(lambda: isinstance(ov._default, overlay.QLineEdit) and ov._default.isVisible())
+    ov._key(QKeyEvent(QKeyEvent.Type.KeyPress, Qt.Key.Key_Escape, Qt.KeyboardModifier.NoModifier))
+    t.join(2)
+    assert box == [None]
+    ov.close()
+
+
+def test_corner_pill_shows_one_line_and_opens_on_click():
+    ov = overlay.Overlay(UI | {"corner": {**UI["main"], "anchor": "se", "x_pct": 99, "y_pct": 98}})
+    answer = "Primeira linha da resposta\n" + "detalhe " * 50
+    ov.text(answer)
+    ov.to_corner()
+    pump_until(lambda: ov.kind == "corner" and ov.body.text().endswith("…"))
+    assert "\n" not in ov.body.text() and not ov.closed.is_set()
+    ov._click()
+    assert ov.kind == "main" and ov.body.text() == answer and not ov.closed.is_set()
+    ov._click()
+    assert ov.closed.is_set()

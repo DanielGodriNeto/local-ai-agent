@@ -14,14 +14,20 @@ Windows and Linux (Hyprland). The Linux scripts are untested on real hardware.
 
 ```bash
 pip install -r requirements.txt
-python intent.py               # downloads the intent model (~125 MB, pinned and sha256-checked) into models/e5/
+python onboarding.py            # checks the AI and the mic, downloads the models (also opens on the agent's first run)
+python intent.py               # or just the intent model (~125 MB, pinned and sha256-checked) into models/e5/
 python game_indexer.py          # optional: index Steam games into games.json
 python listen.py                # speak; silence ends the session
 python orchestrator.py "abre o navegador" --dry-run   # text mode
 ```
 
-Hyprland: `bind = SUPER, V, exec, ~/.config/local-ai-agent/voice_trigger.sh`
-Windows: `python hotkey_windows.py` (Win+F12, easy to bind to a mouse button; Win+V is reserved by Windows)
+Hyprland: `bind = SUPER, V, exec, ~/.config/local-ai-agent/voice_trigger.sh` (talk) and `text_trigger.sh` (type)
+Windows: `python hotkey_windows.py`: Win+F12 talks, Win+F11 opens a text box (easy to bind to mouse buttons; Win+V is
+reserved by Windows). The tray icon has the same actions, plus Settings.
+
+A task that takes longer than `ui.background_after_s` (12 s) shrinks into a pill in the corner, so you can keep
+working and even start another request. When it ends the pill turns green, a notification says so (`ui.notify`), and
+a click opens the answer. Tray > "Cancelar tarefas em segundo plano" stops them.
 
 The hotkey talks to a resident agent (`agentd.py`), started on the first press. Press again to cancel (mic, AI and its
 child processes). `daemon.mode` in the config: `leve` (default) frees the speech and intent models after

@@ -132,3 +132,39 @@ def test_earcons_are_short_and_never_raise(monkeypatch):
     assert all(0.05 < len(c) / earcons.RATE < 0.4 and abs(c).max() <= 0.3 for c in earcons.CUES.values())
     monkeypatch.setitem(__import__("sys").modules, "sounddevice", None)  # no audio device / import fails
     earcons.play("done")
+
+
+def test_typed_session_skips_the_mic_and_a_long_task_moves_to_the_corner(monkeypatch):
+    import threading
+    calls, release = [], threading.Event()
+
+    class TypedUI(FakeUI):
+        def prompt(self, _q):
+            return "refatora o modulo"
+
+        def to_corner(self):
+            calls.append("corner")
+            release.set()  # the task finishes only after it moved
+
+    def handle(text, cfg, **_kw):
+        calls.append(text)
+        release.wait(5)
+        return "Refatorei."
+
+    monkeypatch.setattr(L.o, "handle", handle)
+    cfg = {**ENERGY_CFG, "ui": {**ENERGY_CFG["ui"], "background_after_s": 0.05, "notify": True}}
+    ui = TypedUI()
+    L.session(ui, cfg, iter([]), models=lambda: (lambda _a: "nunca usado", None), typed=True,
+              detach=lambda: calls.append("detach"), notify=lambda title, text: calls.append((title, text)))
+    assert calls == ["refatora o modulo", "detach", "corner", ("Tarefa pronta", "Refatorei.")]
+    assert ui.texts[-1] == "Refatorei." and ui.holds == [None]  # waits in the pill until opened
+
+
+def test_typed_session_closes_on_empty_text():
+    class EmptyUI(FakeUI):
+        def prompt(self, _q):
+            return None
+
+    ui = EmptyUI()
+    L.session(ui, ENERGY_CFG, iter([]), models=lambda: (lambda _a: "x", None), typed=True)
+    assert ui.closed.is_set() and ui.holds == []

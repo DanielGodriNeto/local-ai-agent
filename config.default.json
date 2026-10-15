@@ -131,6 +131,8 @@
     "theme": "auto",
     "accent": "blue",
     "text_scale": 1.0,
+    "background_after_s": 12,
+    "notify": true,
     "font": "",
     "main": {"anchor": "n", "x_pct": 50, "y_pct": 4, "size_max": 30, "size_min": 17, "min_width": 340,
              "max_width_pct": 60, "radius": 26, "pad": 20},

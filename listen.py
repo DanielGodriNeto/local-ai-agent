@@ -163,14 +163,18 @@ def speaker(cfg: dict) -> Optional[tts.Speaker]:
 
 
 def session(ui: overlay.Overlay, cfg: dict, blocks: Optional[Iterator[np.ndarray]] = None,
-            models: Optional[Callable[[], tuple]] = None, cancel: Optional[threading.Event] = None) -> None:
+            models: Optional[Callable[[], tuple]] = None, cancel: Optional[threading.Event] = None,
+            typed: bool = False, detach: Optional[Callable[[], None]] = None,
+            notify: Optional[Callable[[str, str], None]] = None) -> None:
     """models() -> (stt, decide[, speaker]) lets the daemon keep them loaded. Closing the overlay or cancel stops
-    everything, including the voice."""
+    everything, including the voice. typed: a text box instead of the mic. detach(): called when a long task moves to
+    the corner pill, so the daemon can start another session; notify(title, text) when it finishes there."""
     v, cancel = cfg["voice"], cancel or threading.Event()
     try:
-        ui.status("Ouvindo", overlay.LISTEN)
+        ui.status("Escreva" if typed else "Ouvindo", overlay.LISTEN)
         sound = v.get("earcons", True)
-        earcons.play("listen", sound)
+        if not typed:
+            earcons.play("listen", sound)
         stt, decide, *extra = models() if models else (LazyWhisper(v["model"], v["language"]), preload_intent(cfg),
                                                         speaker(cfg))
         voice = extra[0] if extra else None
@@ -185,7 +189,12 @@ def session(ui: overlay.Overlay, cfg: dict, blocks: Optional[Iterator[np.ndarray
             cancel.set()  # also kills the AI and its child processes
             ui.close()
         threading.Thread(target=watch, daemon=True).start()
-        text = listen(blocks or mic_blocks(stop), seg, stt, ui.text, v["partial_every_s"])
+        if typed:
+            text = ui.prompt("O que você precisa?")
+            if not text:
+                return ui.close()
+        else:
+            text = listen(blocks or mic_blocks(stop), seg, stt, ui.text, v["partial_every_s"])
         if not text:
             ui.status("Nada ouvido", overlay.IDLE)
             earcons.play("error", sound)
@@ -212,9 +221,28 @@ def session(ui: overlay.Overlay, cfg: dict, blocks: Optional[Iterator[np.ndarray
                 streamed.append(e.text)
                 ui.text("".join(streamed))
 
-        out = o.handle(text, cfg, decide=decide, confirm=confirm,
-                       pick=lambda q, opts: ui.choose(q, opts), on_event=on_event, cancel=cancel).strip() or "Feito."
+        working, moved = threading.Event(), threading.Event()
+
+        def background() -> None:  # a long task moves to the corner pill so the PC (and the hotkey) is free again
+            if not working.wait(cfg["ui"].get("background_after_s", 12)) and not cancel.is_set():
+                moved.set()
+                detach()
+                ui.to_corner()
+        if detach:
+            threading.Thread(target=background, daemon=True).start()
+        try:
+            out = o.handle(text, cfg, decide=decide, confirm=confirm,
+                           pick=lambda q, opts: ui.choose(q, opts), on_event=on_event, cancel=cancel).strip() or "Feito."
+        finally:
+            working.set()
         HISTORY.append((text, out))
+        if moved.is_set():  # finished in the background: the pill says so, a click opens the answer
+            ui.status("Pronto", overlay.GREEN)
+            earcons.play("done", sound)
+            ui.text(out)
+            if notify and cfg["ui"].get("notify", True):
+                notify("Tarefa pronta", out[:200])
+            return ui.hold(None)
         ui.status("Pronto", overlay.GREEN)
         earcons.play("done", sound)
         ui.text(out)
