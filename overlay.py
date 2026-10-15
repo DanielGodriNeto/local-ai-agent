@@ -248,6 +248,8 @@ class Overlay:
         row.addLayout(col)
         self.cap = QLabel()
         self.body = QLabel()
+        for label in (self.cap, self.body):  # AI and hook text is never markup: no fake buttons, links or images
+            label.setTextFormat(Qt.TextFormat.PlainText)
         self.body.setWordWrap(True)
         self.scroll = QScrollArea()
         self.scroll.setWidget(self.body)

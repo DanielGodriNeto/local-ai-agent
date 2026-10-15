@@ -73,3 +73,11 @@ def test_long_text_scrolls_inside_a_card_that_fits_the_screen():
     assert ov.card.height() <= area.height() * 0.85
     assert ov.body.height() > ov.scroll.height()  # the rest is a scroll away, not cut
     ov.close()
+
+
+def test_ai_text_is_shown_as_plain_text_never_markup():
+    ov = overlay.Overlay(UI)
+    ov.text('<b>oi</b><img src="x.png"><a href="http://x">clique</a>')
+    pump_until(lambda: ov.body.text().startswith("<b>"))
+    assert ov.body.textFormat() == Qt.TextFormat.PlainText and ov.cap.textFormat() == Qt.TextFormat.PlainText
+    ov.close()
