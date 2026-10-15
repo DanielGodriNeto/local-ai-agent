@@ -1,4 +1,5 @@
 import threading
+import time
 
 import access
 
@@ -130,6 +131,17 @@ def test_a_partial_name_asks_first_and_controls_outside_the_window_are_ignored()
                      {"name": "Salvar", "type": "Botão", "rect": (950, 100, 80, 30)}])  # scrolled out of the window
     out, asked = run({"do": "click", "name": "salvar", "button": "left"}, desk, choice=None)
     assert asked == [["Não salvar (Botão)"]] and desk.clicks == [] and out == "(cancelado)"
+
+
+def test_a_window_too_slow_to_list_its_controls_suggests_the_grid(monkeypatch):
+    class Slow(FakeDesk):
+        def find(self, t):
+            time.sleep(1)
+            return self.items
+    monkeypatch.setattr(access, "FIND_S", 0.2)
+    desk = Slow([{"name": "Salvar", "type": "Botão", "rect": (100, 100, 80, 30)}])
+    out, asked = run({"do": "click", "name": "salvar", "button": "left"}, desk)
+    assert "grade" in out and desk.clicks == [] and not asked
 
 
 def test_elevated_or_changed_window_is_never_clicked():

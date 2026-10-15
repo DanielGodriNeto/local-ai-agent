@@ -19,6 +19,7 @@ import screen
 Rect = tuple[int, int, int, int]  # x, y, w, h
 ROUNDS = 8  # grid answers before it gives up
 AI_MAX_PX = 1280  # the window image is downscaled to this, so the AI's pixels are the ones we scale back
+FIND_S = 8  # a huge web page lists thousands of controls; past this we suggest the grid
 NOUNS = r"(?:botao|menu|aba|guia|link|icone|opcao|campo|pasta|item)"
 CLICK = re.compile(rf"^\s*{intent.FILLER}(?:d[ae]\s+(?:um\s+)?)?(duplo\s+)?"
                    r"(?:clica|clique|clicar|click|aperta|aperte|apertar|toca|toque)\b(.*)$")
@@ -133,6 +134,18 @@ def to_screen(point: tuple[int, int], rect: Rect, scale: float) -> tuple[int, in
 
 # ---- the flows (desk = the OS adapter; FakeDesk in the tests) ----
 
+def within(fn: Callable[[], list], seconds: float, cancel: threading.Event) -> Optional[list]:
+    """fn() in a helper thread; None if it takes longer than `seconds` or the user cancels.
+    ponytail: a stuck UI Automation call can't be aborted, so its thread is left to finish on its own."""
+    box: list = []
+    worker = threading.Thread(target=lambda: box.append(fn()), daemon=True)
+    worker.start()
+    end = time.monotonic() + seconds
+    while worker.is_alive() and not cancel.is_set() and time.monotonic() < end:
+        worker.join(0.05)
+    return box[0] if box else None
+
+
 def run(cmd: dict, cfg: dict, desk, hear: Callable[[str], Optional[str]], confirm: Callable[[str], bool],
         pick: Callable[[str, list], Optional[int]], cancel: threading.Event,
         ask_ai: Optional[Callable[[str, str], str]] = None) -> str:
@@ -146,7 +159,12 @@ def run(cmd: dict, cfg: dict, desk, hear: Callable[[str], Optional[str]], confir
         return grid(desk, t, hear, cancel)
     if not t:
         return "Não achei nenhuma janela."
-    inside = [it for it in desk.find(t) if contains(t["rect"], center(it["rect"]))]  # half scrolled out: not there
+    found = within(lambda: desk.find(t), FIND_S, cancel)
+    if cancel.is_set():
+        return "(cancelado)"
+    if found is None:
+        return "Essa janela demorou demais para listar os botões. Diga “mostrar grade” para clicar por números."
+    inside = [it for it in found if contains(t["rect"], center(it["rect"]))]  # half scrolled out: not there
     items, tier = rank(cmd["name"], inside)
     if not items:
         return by_ai(cmd, cfg, desk, t, confirm, cancel, ask_ai or (lambda p, d: _ask_brain(cfg, p, d, cancel)))
@@ -316,7 +334,6 @@ class Desk:
         for prop in (U.UIA_NamePropertyId, U.UIA_LocalizedControlTypePropertyId, U.UIA_BoundingRectanglePropertyId,
                      U.UIA_IsOffscreenPropertyId, U.UIA_IsEnabledPropertyId):
             req.AddProperty(prop)
-        # ponytail: one FindAll over the whole tree; a huge web page can take a few seconds
         found = uia.ElementFromHandle(t["hwnd"]).FindAllBuildCache(U.TreeScope_Descendants, uia.ControlViewCondition, req)
         items = []
         for i in range(found.Length if found else 0):
