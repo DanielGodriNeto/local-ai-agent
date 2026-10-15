@@ -5,6 +5,7 @@ It never guesses: a low score, two close presets or an opposing verb ("fecha", "
 """
 import re
 import threading
+import unicodedata
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -27,23 +28,31 @@ BUILTIN = {  # requests that go to the AI: quick = short answer, no tools; task 
              "escreve um teste pra essa função", "procura nos meus arquivos", "corrige o erro 500 do login",
              "cria um script que renomeia arquivos", "fix the failing test"],
 }
-FILLER = r"(?:(?:ei|hey|ok|jarvis|por favor|agora|então|entao)[\s,]*)*"
+# All patterns run on plain() text: lower case, no accents ("pára" -> "para", "não" -> "nao").
+FILLER = r"(?:(?:ei|hey|ok|jarvis|por favor|agora|entao)[\s,]*)*"
 # "para" is also the preposition "for": count it only as the first word or after a modal verb
-STOP_FIRST = re.compile(rf"^\s*{FILLER}(par[ae]r?|stop)\b", re.I)
-STOP_MODAL = re.compile(r"\b(pode|quero|consegue|vai|preciso)\s+(par[ae]r?)\b", re.I)
-STOP_ANY = re.compile(r"\b(fech\w*|deslig\w*|encerr\w*|cancel\w*|interromp\w*|termin(?:a|e|ar)\b|mat[ae]r?|close|quit|kill|shut\w*)\b", re.I)
-QUESTION = re.compile(rf"^\s*{FILLER}(como|por ?qu[eê]|o que|qual|quais|quanto|quando|onde|quem|será|sera|"
-                      r"how|why|what|which|when|where|who)\b|\?\s*$", re.I)
+STOP_FIRST = re.compile(rf"^\s*{FILLER}(par[ae]r?|stop)\b")
+STOP_MODAL = re.compile(r"\b(pode|quero|consegue|vai|preciso)\s+(par[ae]r?)\b")
+STOP_ANY = re.compile(r"\b(fech\w*|deslig\w*|encerr\w*|cancel\w*|interromp\w*|termin(?:a|e|ar)\b|mat[ae]r?|"
+                      r"sai(?:r|a)?|tir[ae]r?|remov\w*|close|quit|exit|kill|shut\w*)\b")
+NEGATION = re.compile(r"\b(nao|nem|nunca|jamais|sem|deixa de|para de|pare de|don'?t|do not|never|no)\b")
+QUESTION = re.compile(rf"^\s*{FILLER}(como|por ?que|o que|qual|quais|quanto|quando|onde|quem|sera|"
+                      r"how|why|what|which|when|where|who)\b|\?\s*$")
+
+
+def plain(text: str) -> str:
+    return "".join(c for c in unicodedata.normalize("NFD", text.lower()) if not unicodedata.combining(c))
 
 
 def question(text: str) -> bool:
     """A question about an action ("como eu abro o terminal?") is not the action."""
-    return bool(QUESTION.search(text))
+    return bool(QUESTION.search(plain(text)))
 
 
 def opposing(text: str) -> bool:
-    """True when the request asks to stop/close something: such a request never runs an open/start preset."""
-    return bool(STOP_ANY.search(text) or STOP_FIRST.search(text) or STOP_MODAL.search(text))
+    """True when the request asks to stop, close or NOT do something: it never runs an open/start preset."""
+    t = plain(text)
+    return any(p.search(t) for p in (STOP_ANY, STOP_FIRST, STOP_MODAL, NEGATION))
 
 
 class E5:

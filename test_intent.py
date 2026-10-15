@@ -46,7 +46,10 @@ def test_two_close_presets_ask_the_user():
 def test_opposing_verb_never_runs_a_preset():
     m = matcher(min_score=0.1, margin=0.01)
     for text in ("fecha o navegador", "desliga o terminal", "para o terminal", "pare o navegador",
-                 "pode parar o terminal", "encerra a internet", "cancela o terminal"):
+                 "pode parar o terminal", "encerra a internet", "cancela o terminal",
+                 "não abre o navegador", "nao abre o terminal", "nunca abre o navegador", "não quero abrir o terminal",
+                 "don't open the terminal", "deixa de abrir o terminal", "pára o terminal", "sai do navegador",
+                 "sair do terminal", "exit the terminal", "tira o navegador", "remove o terminal"):
         assert m.decide(text)["action"] == "escalate", text
 
 

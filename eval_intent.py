@@ -18,6 +18,8 @@ CASES = [  # (phrase, expected: preset name | "quick" | "task" | SAFE)
     # opposite verbs: must never run the "open" preset
     ("fecha o navegador", SAFE), ("para o jogo", SAFE), ("desliga o terminal", SAFE),
     ("encerra o counter strike", SAFE), ("pode parar o navegador", SAFE), ("cancela isso", SAFE),
+    ("não abre o navegador", SAFE), ("nunca trava a tela", SAFE), ("pára o jogo", SAFE), ("sai do terminal", SAFE),
+    ("don't lock the screen", SAFE), ("não quero jogar agora", SAFE),
     # speech-recognition noise: right preset or safe, never a wrong one
     ("abre o navegado", "open_browser|" + SAFE), ("a bri o terminal", "open_terminal|" + SAFE),
     ("trava a tela do pecê", "lock_screen|" + SAFE), ("abre o na vegador", "open_browser|" + SAFE),
