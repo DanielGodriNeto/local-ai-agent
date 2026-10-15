@@ -5,6 +5,7 @@ Bind this to a key (Hyprland: bind = SUPER, V, exec, python ~/.config/local-ai-a
 import queue
 import sys
 import threading
+import time
 from collections import deque
 from pathlib import Path
 from typing import Callable, Iterator, Optional
@@ -95,8 +96,9 @@ class Segmenter:
 
 
 def listen(blocks: Iterator[np.ndarray], seg: Segmenter, transcribe: Callable[[np.ndarray], str],
-           on_partial: Callable[[str], None], partial_every: float = 0.8) -> Optional[str]:
-    """Consume blocks until the speaker stops; stream partial text meanwhile. None = nothing heard."""
+           on_partial: Callable[[str], None], partial_every: float = 0.8, marks: Optional[dict] = None) -> Optional[str]:
+    """Consume blocks until the speaker stops; stream partial text meanwhile. None = nothing heard.
+    marks["spoken"]: when the silence that ends the speech was detected (time.monotonic)."""
     pre, buf, done = deque(maxlen=3), [], threading.Event()
 
     def partials():
@@ -118,6 +120,8 @@ def listen(blocks: Iterator[np.ndarray], seg: Segmenter, transcribe: Callable[[n
             if event == "timeout":
                 return None
             if event == "end":
+                if marks is not None:
+                    marks["spoken"] = time.monotonic()
                 break
         else:
             return None  # source ended / cancelled
@@ -214,7 +218,7 @@ def session(ui: overlay.Overlay, cfg: dict, blocks: Optional[Iterator[np.ndarray
         def segmenter() -> Segmenter:  # one per utterance: its noise floor and the VAD state start fresh
             return Segmenter(v["silence_s"], v["no_speech_timeout_s"], v["max_s"], v["min_rms"],
                              vad=SileroVAD() if v.get("vad", "silero") == "silero" else None)
-        stop = threading.Event()
+        stop, marks = threading.Event(), {}
 
         def watch():
             while not (ui.closed.wait(0.1) or cancel.is_set()):
@@ -228,7 +232,8 @@ def session(ui: overlay.Overlay, cfg: dict, blocks: Optional[Iterator[np.ndarray
             if not text:
                 return ui.close()
         else:
-            text = listen(blocks or mic_blocks(stop), segmenter(), stt, ui.text, v["partial_every_s"])
+            text = listen(blocks or mic_blocks(stop), segmenter(), stt, ui.text, v["partial_every_s"], marks)
+        marks["text"] = time.monotonic()
         if not text:
             ui.status("Nada ouvido", overlay.IDLE)
             earcons.play("error", sound)
@@ -239,6 +244,7 @@ def session(ui: overlay.Overlay, cfg: dict, blocks: Optional[Iterator[np.ndarray
         ui.text(text)
 
         def confirm(question: str) -> bool:
+            marks.setdefault("asked", time.monotonic())  # from here on the user's own pause counts too
             ok = ui.ask(question)
             if ok:
                 ui.status("Trabalhando", overlay.IDLE)
@@ -253,6 +259,7 @@ def session(ui: overlay.Overlay, cfg: dict, blocks: Optional[Iterator[np.ndarray
 
         if (cmd := access.parse(text)):  # voice accessibility: no AI unless nothing matches, never in the background
             out = access.run({**cmd, "said": text}, cfg, access.desk(ui.gui, ui.win), hear, confirm, lambda q, opts: ui.choose(q, opts), cancel)
+            log_latency("access", marks)
             ui.status("Pronto", overlay.GREEN)
             earcons.play("done", sound)
             ui.text(out)
@@ -260,6 +267,7 @@ def session(ui: overlay.Overlay, cfg: dict, blocks: Optional[Iterator[np.ndarray
         streamed = []
 
         def on_event(e) -> None:  # the answer appears as the AI writes it; tool use shows in the tag
+            marks.setdefault("first", time.monotonic())
             if voice and not streamed:
                 voice.warm()  # load the voice while the AI is still answering
             if e.kind == "tool":
@@ -277,11 +285,17 @@ def session(ui: overlay.Overlay, cfg: dict, blocks: Optional[Iterator[np.ndarray
                 ui.to_corner()
         if detach:
             threading.Thread(target=background, daemon=True).start()
+        def timed(said: str, c: dict) -> dict:
+            try:
+                return decide(said, c)
+            finally:
+                marks["decided"] = time.monotonic()
         try:
-            out = o.handle(text, cfg, decide=decide, confirm=confirm,
+            out = o.handle(text, cfg, decide=timed, confirm=confirm,
                            pick=lambda q, opts: ui.choose(q, opts), on_event=on_event, cancel=cancel).strip() or "Feito."
         finally:
             working.set()
+        log_latency("ai", marks)
         HISTORY.append((text, out))
         if moved.is_set():  # finished in the background: the pill says so, a click opens the answer
             ui.status("Pronto", overlay.GREEN)
@@ -306,6 +320,18 @@ def session(ui: overlay.Overlay, cfg: dict, blocks: Optional[Iterator[np.ndarray
         earcons.play("error", cfg.get("voice", {}).get("earcons", True))
         ui.text(f"{type(e).__name__}: {e}"[:300], overlay.RED)
         ui.hold(5)
+
+
+def log_latency(kind: str, marks: dict) -> None:
+    """Seconds per stage, metadata only: speech end -> text (Whisper), -> intent decided, -> first AI output, -> done.
+    A stage that ran after a confirmation question includes the user's pause; "asked" says so."""
+    marks["done"] = time.monotonic()
+    start = marks.get("spoken", marks.get("text"))
+    entry = {"action": "latency", "kind": kind, "asked": "asked" in marks}
+    for stage in ("text", "decided", "first", "done"):
+        if stage in marks and start is not None:
+            entry[f"{stage}_s"] = round(marks[stage] - start, 3)
+    o.log(entry)
 
 
 def main() -> None:

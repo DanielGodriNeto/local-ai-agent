@@ -224,3 +224,12 @@ def test_whisper_sizes_are_pinned_and_unknown_names_refused(tmp_path, monkeypatc
     assert L.whisper_path(str(tmp_path)) == str(tmp_path)
     with pytest.raises(ValueError):
         L.whisper_path("large-v3")
+
+
+def test_latency_log_has_seconds_per_stage_and_no_text(monkeypatch):
+    seen = []
+    monkeypatch.setattr(L.o, "log", seen.append)
+    monkeypatch.setattr(L.time, "monotonic", lambda: 12.0)
+    L.log_latency("ai", {"spoken": 10.0, "text": 10.5, "decided": 10.6, "first": 11.0})
+    assert seen == [{"action": "latency", "kind": "ai", "asked": False, "text_s": 0.5, "decided_s": 0.6,
+                     "first_s": 1.0, "done_s": 2.0}]
