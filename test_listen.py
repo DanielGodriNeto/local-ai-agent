@@ -49,6 +49,10 @@ def test_listen_none_when_nothing_said():
     assert L.listen(iter([SILENCE] * 80), L.Segmenter(no_speech_s=2.0), lambda _a: "x", lambda _t: None) is None
 
 
+ENERGY_CFG = {**L.o.load_config()}
+ENERGY_CFG["voice"] = {**ENERGY_CFG["voice"], "vad": "energy", "earcons": False}  # sine test tones are not speech
+
+
 class FakeUI:
     def __init__(self):
         import threading
@@ -77,7 +81,7 @@ def test_long_answer_is_kept_whole_streamed_and_stays_up(monkeypatch):
 
     monkeypatch.setattr(L.o, "handle", handle)
     ui, blocks = FakeUI(), iter([SILENCE] * 2 + [TONE] * 5 + [SILENCE] * 12)
-    L.session(ui, L.o.load_config(), blocks, models=lambda: (lambda _a: "conta uma historia", None))
+    L.session(ui, ENERGY_CFG, blocks, models=lambda: (lambda _a: "conta uma historia", None))
     assert ui.texts[-1] == long.strip() and L.HISTORY[-1] == ("conta uma historia", long.strip())
     assert len(ui.texts[-2]) == 5000  # the streamed text grew to the full answer
     assert ui.holds == [None]  # stays until dismissed
@@ -87,7 +91,44 @@ def test_short_answer_fades():
     ui = FakeUI()
     L.o.handle, real = (lambda *a, **k: "preset: open_browser"), L.o.handle
     try:
-        L.session(ui, L.o.load_config(), iter([TONE] * 5 + [SILENCE] * 12), models=lambda: (lambda _a: "abre", None))
+        L.session(ui, ENERGY_CFG, iter([TONE] * 5 + [SILENCE] * 12), models=lambda: (lambda _a: "abre", None))
     finally:
         L.o.handle = real
     assert ui.holds == [4]
+
+
+def speech_wav(path):
+    """Real speech without shipping a recording: Windows' built-in voice reads a sentence (skipped elsewhere)."""
+    import subprocess
+    import sys
+
+    import pytest
+    if sys.platform != "win32":
+        pytest.skip("needs the Windows speech synthesizer")
+    ps = ("Add-Type -AssemblyName System.Speech; $s = New-Object System.Speech.Synthesis.SpeechSynthesizer; "
+          "$f = New-Object System.Speech.AudioFormat.SpeechAudioFormatInfo(16000, 16, 1); "
+          f"$s.SetOutputToWaveFile('{path}', $f); $s.Speak('Abre o navegador, por favor. Qual a capital da Franca?')")
+    subprocess.run(["powershell", "-NoProfile", "-Command", ps], check=True, capture_output=True)
+    return path
+
+
+def test_silero_hears_speech_not_tones_or_noise():
+    import wave
+    from pathlib import Path
+    vad = L.SileroVAD()
+    rng = np.random.default_rng(0)
+    assert max(vad(TONE) for _ in range(10)) < 0.5
+    assert max(vad((rng.standard_normal(N) * 0.05).astype(np.float32)) for _ in range(10)) < 0.5
+    speech = speech_wav(Path(__import__("tempfile").mkdtemp()) / "fala.wav")
+    with wave.open(str(speech)) as w:
+        audio = np.frombuffer(w.readframes(w.getnframes()), np.int16).astype(np.float32) / 32768
+    seg = L.Segmenter(vad=L.SileroVAD())
+    events = [seg.feed(audio[i:i + N]) for i in range(0, len(audio) - N, N)] + [seg.feed(SILENCE) for _ in range(12)]
+    assert events.count("start") == 1 and "end" in events
+
+
+def test_earcons_are_short_and_never_raise(monkeypatch):
+    import earcons
+    assert all(0.05 < len(c) / earcons.RATE < 0.4 and abs(c).max() <= 0.3 for c in earcons.CUES.values())
+    monkeypatch.setitem(__import__("sys").modules, "sounddevice", None)  # no audio device / import fails
+    earcons.play("done")

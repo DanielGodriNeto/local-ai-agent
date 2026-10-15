@@ -11,6 +11,7 @@ from typing import Callable, Iterator, Optional
 
 import numpy as np
 
+import earcons
 import orchestrator as o
 import overlay
 
@@ -19,18 +20,52 @@ SHORT = 120  # answers up to this length fade after a few seconds; longer ones s
 HISTORY: deque = deque(maxlen=10)  # (what was said, answer); RAM only, gone when the agent stops
 
 
-class Segmenter:
-    """Energy VAD over 100 ms blocks. feed() -> 'start' | 'end' | 'timeout' | None."""
+class SileroVAD:
+    """Speech probability per block, streamed through the Silero v6 model that ships with faster-whisper (~2 MB).
+    Fans, music and keyboard clicks score low, unlike plain loudness."""
+    CHUNK, CONTEXT = 512, 64
 
-    def __init__(self, silence_s=1.0, no_speech_s=6.0, max_s=20.0, min_rms=0.012):
+    def __init__(self):
+        import os
+
+        import faster_whisper.vad
+        import onnxruntime as ort
+
+        opts = ort.SessionOptions()
+        opts.intra_op_num_threads, opts.inter_op_num_threads, opts.log_severity_level = 1, 1, 4
+        path = os.path.join(os.path.dirname(faster_whisper.vad.__file__), "assets", "silero_vad_v6.onnx")
+        self.sess = ort.InferenceSession(path, opts, providers=["CPUExecutionProvider"])
+        self.h = self.c = np.zeros((1, 1, 128), np.float32)
+        self.ctx, self.rest = np.zeros(self.CONTEXT, np.float32), np.zeros(0, np.float32)
+
+    def __call__(self, block: np.ndarray) -> float:
+        audio, best = np.concatenate([self.rest, block.astype(np.float32)]), 0.0
+        n = len(audio) // self.CHUNK * self.CHUNK
+        for chunk in audio[:n].reshape(-1, self.CHUNK):
+            out, self.h, self.c = self.sess.run(None, {"input": np.concatenate([self.ctx, chunk])[None],
+                                                       "h": self.h, "c": self.c})
+            self.ctx, best = chunk[-self.CONTEXT:], max(best, float(out.ravel()[0]))
+        self.rest = audio[n:]
+        return best
+
+
+class Segmenter:
+    """Speech segmentation over 100 ms blocks. feed() -> 'start' | 'end' | 'timeout' | None.
+    With a vad (block -> speech probability) it uses that; without, plain loudness against the room noise."""
+
+    def __init__(self, silence_s=1.0, no_speech_s=6.0, max_s=20.0, min_rms=0.012,
+                 vad: Optional[Callable[[np.ndarray], float]] = None):
         self.silence_s, self.no_speech_s, self.max_s, self.min_rms = silence_s, no_speech_s, max_s, min_rms
-        self.noise, self.speaking = min_rms / 3, False
+        self.noise, self.speaking, self.vad = min_rms / 3, False, vad
         self.t = self.speech_t = self.silent_t = 0.0
         self.loud_run = 0
 
     def feed(self, block: np.ndarray) -> Optional[str]:
         rms = float(np.sqrt(np.mean(block ** 2)))
-        loud = rms > max(self.min_rms, self.noise * 3)
+        if self.vad:  # hysteresis: harder to start (0.5) than to keep going (0.35)
+            loud = self.vad(block) > (0.35 if self.speaking else 0.5)
+        else:
+            loud = rms > max(self.min_rms, self.noise * 3)
         if not self.speaking:
             self.t += BLOCK_S
             self.loud_run = self.loud_run + 1 if loud else 0
@@ -127,8 +162,11 @@ def session(ui: overlay.Overlay, cfg: dict, blocks: Optional[Iterator[np.ndarray
     v, cancel = cfg["voice"], cancel or threading.Event()
     try:
         ui.status("OUVINDO", overlay.LISTEN)
+        sound = v.get("earcons", True)
+        earcons.play("listen", sound)
         stt, decide = models() if models else (LazyWhisper(v["model"], v["language"]), preload_intent(cfg))
-        seg = Segmenter(v["silence_s"], v["no_speech_timeout_s"], v["max_s"], v["min_rms"])
+        seg = Segmenter(v["silence_s"], v["no_speech_timeout_s"], v["max_s"], v["min_rms"],
+                        vad=SileroVAD() if v.get("vad", "silero") == "silero" else None)
         stop = threading.Event()
 
         def watch():
@@ -141,9 +179,11 @@ def session(ui: overlay.Overlay, cfg: dict, blocks: Optional[Iterator[np.ndarray
         text = listen(blocks or mic_blocks(stop), seg, stt, ui.text, v["partial_every_s"])
         if not text:
             ui.status("NADA OUVIDO", overlay.IDLE)
+            earcons.play("error", sound)
             ui.text("Não ouvi nada.", overlay.IDLE)
             return ui.hold(1.5)
         ui.status("DECIDINDO", overlay.IDLE)
+        earcons.play("heard", sound)
         ui.text(text)
 
         def confirm(question: str) -> bool:
@@ -165,10 +205,12 @@ def session(ui: overlay.Overlay, cfg: dict, blocks: Optional[Iterator[np.ndarray
                        pick=lambda q, opts: ui.choose(q, opts), on_event=on_event, cancel=cancel).strip() or "Feito."
         HISTORY.append((text, out))
         ui.status("PRONTO", overlay.GREEN)
+        earcons.play("done", sound)
         ui.text(out)
         ui.hold(4 if len(out) <= SHORT else None)
     except Exception as e:  # never leave the overlay stuck on screen
         ui.status("ERRO", overlay.RED)
+        earcons.play("error", cfg.get("voice", {}).get("earcons", True))
         ui.text(f"{type(e).__name__}: {e}"[:300], overlay.RED)
         ui.hold(5)
 
