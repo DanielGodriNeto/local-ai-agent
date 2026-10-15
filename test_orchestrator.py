@@ -139,15 +139,17 @@ def test_bad_proposals_rejected():
 
 
 def test_approve_merges_only_accepted(tmp_path):
-    cfg_path = tmp_path / "presets.json"
-    cfg_path.write_text(json.dumps(CFG))
+    cfg_path = tmp_path / "config.json"
+    cfg_path.write_text(json.dumps({"voice": {"model": "small"}}))
     pending = tmp_path / "p.json"
     pending.write_text(json.dumps([{"name": "open_notes", "description": "Abre notas", "linux": ["gedit"]}]))
     with mock.patch.object(o, "PENDING", pending):
         assert o.approve(cfg_path, ask=lambda _: "n") == 0
         pending.write_text(json.dumps([{"name": "open_notes", "description": "Abre notas", "linux": ["gedit"]}]))
         assert o.approve(cfg_path, ask=lambda _: "s") == 1
-    assert json.loads(cfg_path.read_text())["presets"]["open_notes"]["confirm"] is False
+    saved = json.loads(cfg_path.read_text())
+    assert saved["presets"]["open_notes"]["confirm"] is False
+    assert saved["voice"] == {"model": "small"} and "open_browser" not in saved["presets"]  # only the change is written
 
 
 def test_confirm_cmd_used_without_tty(monkeypatch):

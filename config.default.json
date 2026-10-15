@@ -1,4 +1,123 @@
 {
+  "intent": {
+    "threads": 2,
+    "min_score": 0.86,
+    "margin": 0.02
+  },
+  "brain": {
+    "use": "auto",
+    "workdir": "",
+    "timeout_s": 600,
+    "memory_idle_s": 600,
+    "confirm_quick": false,
+    "claude": {
+      "model": "",
+      "fast_model": "haiku",
+      "tools": [
+        "Read",
+        "Grep",
+        "Glob"
+      ]
+    },
+    "codex": {
+      "model": "",
+      "fast_model": ""
+    },
+    "ollama": {
+      "url": "http://127.0.0.1:11434",
+      "model": ""
+    }
+  },
+  "presets": {
+    "open_browser": {
+      "description": "open the web browser to surf the internet (navegador, internet, site)",
+      "confirm": false,
+      "linux": [
+        "xdg-open",
+        "https://duckduckgo.com"
+      ],
+      "windows": [
+        "cmd",
+        "/c",
+        "start",
+        "",
+        "https://duckduckgo.com"
+      ],
+      "examples": [
+        "abre o navegador",
+        "abre a internet",
+        "quero navegar na internet",
+        "abre um site",
+        "open the browser",
+        "abre o chrome"
+      ]
+    },
+    "open_terminal": {
+      "description": "open a command-line terminal (terminal, console, shell)",
+      "confirm": false,
+      "linux": [
+        "alacritty"
+      ],
+      "windows": [
+        "cmd",
+        "/c",
+        "start",
+        "cmd"
+      ],
+      "examples": [
+        "abre o terminal",
+        "abre o console",
+        "abre o prompt de comando",
+        "quero um terminal",
+        "open a terminal"
+      ]
+    },
+    "lock_screen": {
+      "description": "lock the screen (trava, bloqueia a tela, o computador)",
+      "confirm": true,
+      "linux": [
+        "loginctl",
+        "lock-session"
+      ],
+      "windows": [
+        "rundll32.exe",
+        "user32.dll,LockWorkStation"
+      ],
+      "examples": [
+        "trava a tela",
+        "bloqueia o computador",
+        "bloqueia a tela",
+        "trava o pc",
+        "lock the screen"
+      ]
+    },
+    "play_game": {
+      "description": "play or launch a video game (jogar, joga, jogo)",
+      "confirm": false,
+      "kind": "game",
+      "examples": [
+        "quero jogar",
+        "abre o jogo",
+        "joga",
+        "inicia o jogo",
+        "play a game",
+        "bora jogar"
+      ]
+    }
+  },
+  "daemon": {
+    "mode": "leve",
+    "unload_after_s": 300
+  },
+  "voice": {
+    "model": "base",
+    "language": "pt",
+    "silence_s": 1.0,
+    "no_speech_timeout_s": 6,
+    "max_s": 20,
+    "partial_every_s": 0.8,
+    "min_rms": 0.012
+  },
   "ui": {
     "font": "",
     "colors": {
@@ -10,15 +129,34 @@
       "error": "#ff2a6d"
     },
     "main": {
-      "anchor": "n", "x_pct": 50, "y_pct": 5,
-      "size_max": 68, "size_min": 22, "min_width": 460, "max_width_pct": 72,
-      "radius": 34, "pad": 48, "logo_px": 76
+      "anchor": "n",
+      "x_pct": 50,
+      "y_pct": 5,
+      "size_max": 68,
+      "size_min": 22,
+      "min_width": 460,
+      "max_width_pct": 72,
+      "radius": 34,
+      "pad": 48,
+      "logo_px": 76
     },
     "corner": {
-      "anchor": "se", "x_pct": 98, "y_pct": 95,
-      "size_max": 26, "size_min": 14, "min_width": 280, "max_width_pct": 30,
-      "radius": 24, "pad": 22, "logo_px": 40
+      "anchor": "se",
+      "x_pct": 98,
+      "y_pct": 95,
+      "size_max": 26,
+      "size_min": 14,
+      "min_width": 280,
+      "max_width_pct": 30,
+      "radius": 24,
+      "pad": 22,
+      "logo_px": 40
     }
   },
-  "dev_overlay": {"port": 47635, "idle_exit_s": 120, "done_hold_s": 5, "ask_hold_s": 45}
+  "dev_overlay": {
+    "port": 47635,
+    "idle_exit_s": 120,
+    "done_hold_s": 5,
+    "ask_hold_s": 45
+  }
 }

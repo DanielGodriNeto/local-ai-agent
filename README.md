@@ -24,7 +24,7 @@ Hyprland: `bind = SUPER, V, exec, ~/.config/local-ai-agent/voice_trigger.sh`
 Windows: `python hotkey_windows.py` (Win+F12, easy to bind to a mouse button; Win+V is reserved by Windows)
 
 The hotkey talks to a resident agent (`agentd.py`), started on the first press. Press again to cancel (mic, AI and its
-child processes). `daemon.mode` in `presets.json`: `leve` (default) frees the speech and intent models after
+child processes). `daemon.mode` in the config: `leve` (default) frees the speech and intent models after
 `unload_after_s` idle, about 53 MB before first use, ~400 MB while listening, ~145 MB after unloading; `rapido` keeps them
 loaded for instant start. The conversation memory survives either way. `python agentd.py --quit` stops it.
 
@@ -34,6 +34,11 @@ Monitors are numbered: **1 = primary**, the rest left to right (`python monitors
 "o que tem no monitor 2" (local OCR via RapidOCR, sends text) or "olha o monitor 2" (sends the image). Nothing is captured
 unless you ask. You always confirm first; the confirmation shows the text that would leave your PC. Screen content is
 passed to the AI as untrusted data (read-only tools, image saved only to a private temp folder and deleted).
+
+## Config
+
+One file: defaults live in `config.default.json`; put only what you change in `config.json` (git-ignored), e.g.
+`{"brain": {"use": "ollama"}, "voice": {"model": "small"}, "daemon": {"mode": "rapido"}}`. Your own presets go there too.
 
 ## Appearance
 
@@ -52,7 +57,7 @@ Merge [claude-hooks.example.json](claude-hooks.example.json) into your Claude Co
 - Cancel kills the AI's whole process tree; `brain.timeout_s` caps a run.
 - The log stores metadata only (action, preset, input length).
 - Unsure decisions escalate or ask; the model never guesses a preset. Presets that ask for confirmation repeat what was heard.
-- Add `examples` (a few phrasings) to each preset in `presets.json` for better matching.
+- Add `examples` (a few phrasings) to each preset for better matching.
 
 ## Tests
 

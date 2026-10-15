@@ -13,6 +13,7 @@ import time
 from pathlib import Path
 
 import brains
+import config
 import game_indexer
 import intent
 import monitors
@@ -37,8 +38,8 @@ Se houver varias solucoes realmente distintas e a escolha for do usuario, NAO im
 ```options {{"question": "pergunta curta", "options": ["solucao 1", "solucao 2"]}}``` (2 a 9 opcoes curtas)."""
 
 
-def load_config(path: Path = HERE / "presets.json") -> dict:
-    return json.loads(path.read_text(encoding="utf-8"))
+def load_config(user: Path = config.USER) -> dict:
+    return config.load(user)
 
 
 def intent_decide(text: str, cfg: dict, matcher=None) -> dict:
@@ -106,9 +107,10 @@ def save_proposals(output: str, cfg: dict) -> str:
     return PROPOSAL_RE.sub("", output).strip()
 
 
-def approve(cfg_path: Path = HERE / "presets.json", ask=input) -> int:
-    """Interactive: show each proposed command verbatim; merge the ones the user accepts."""
+def approve(cfg_path: Path = config.USER, ask=input) -> int:
+    """Interactive: show each proposed command verbatim; accepted ones are saved to the user's config.json."""
     cfg = load_config(cfg_path)
+    new: dict = {}
     pending = json.loads(PENDING.read_text(encoding="utf-8")) if PENDING.exists() else []
     added = 0
     for p in pending:
@@ -121,10 +123,11 @@ def approve(cfg_path: Path = HERE / "presets.json", ask=input) -> int:
         if ask("Aprovar? [s/N] ").strip().lower() not in ("s", "y"):
             continue
         auto = ask("Rodar sem confirmar nas proximas vezes? [s/N] ").strip().lower() in ("s", "y")
-        cfg["presets"][p["name"]] = {"description": p["description"], "confirm": not auto,
-                                     **{k: p[k] for k in ("linux", "windows") if k in p}}
+        cfg["presets"][p["name"]] = new[p["name"]] = {"description": p["description"], "confirm": not auto,
+                                                      **{k: p[k] for k in ("linux", "windows") if k in p}}
         added += 1
-    cfg_path.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
+    if new:
+        config.save({"presets": new}, cfg_path)
     PENDING.unlink(missing_ok=True)
     return added
 
