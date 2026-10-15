@@ -10,6 +10,8 @@ import re
 import subprocess
 import sys
 import time
+import urllib.parse
+import webbrowser
 from pathlib import Path
 
 import brains
@@ -279,12 +281,105 @@ def escalate_with_consent(decision: dict, cfg: dict, dry_run: bool, ask, pick, o
     return escalate(decision["task"], cfg, pick, mode=mode, on_event=on_event, cancel=cancel)
 
 
+# "abre o navegador e pesquisa receita de bolo": split only where the next part starts with an action verb, so
+# "pesquisa arroz e feijão" stays one request. Infinitives ("criar e rodar") never split.
+VERBS = (r"(?:abr[ae]|pesquis[ae]|procur[ae]|busc[ae]|jog[ae]|trav[ae]|bloquei[ae]|toc[ae]|coloc[ae]|mostr[ae]|"
+         r"inici[ae]|execut[ae]|rod[ae]|explic[ae]|resum[ae]|escrev[ae]|cri[ae]|clic[ae]|digit[ae]|"
+         r"me\s+(?:explica|diz|fala|conta))\b")
+CHAIN = re.compile(rf"\s*,\s*(?:e\s+)?(?:depois\s+)?(?={VERBS})|\s+(?:e\s+depois|e\s+(?:então|entao)|depois|e)\s+(?={VERBS})",
+                   re.I)
+CHAIN_MAX = 3
+SEARCH = re.compile(rf"^\s*{intent.FILLER}(?:pesquis|procur|busc)[ae]r?\s+(?:(?P<web>(?:no|na)\s+(?:google|internet|web))\s+)?"
+                    r"(?:por\s+|sobre\s+)?(?P<q>\S.*)$", re.I | re.S)
+SEARCH_URL = "https://duckduckgo.com/?q="
+BROWSER = "open_browser"
+
+
+def chain_parts(text: str) -> list[str]:
+    if intent.question(text):
+        return [text]
+    return [p.strip() for p in CHAIN.split(text) if p.strip()]
+
+
+def web_query(part: str, after_browser: bool) -> str | None:
+    """A web search: said outright ("pesquisa no google X"), or any "pesquisa X" right after opening the browser."""
+    m = SEARCH.match(part)
+    if not m or not (m.group("web") or after_browser):
+        return None
+    return m.group("q").strip().rstrip(".") or None
+
+
+def plan(parts: list[str], cfg: dict, decide) -> list[dict] | str:
+    """Every step understood, or a reason; never half a plan."""
+    import access  # access imports this module
+
+    if len(parts) > CHAIN_MAX:
+        return f"No máximo {CHAIN_MAX} passos por pedido."
+    steps: list[dict] = []
+    for part in parts:
+        after_browser = bool(steps) and steps[-1].get("preset") == BROWSER
+        if (q := web_query(part, after_browser)):
+            if after_browser:
+                steps.pop()  # the search opens the browser itself
+            steps.append({"action": "search", "query": q})
+            continue
+        if len(parts) > 1 and access.parse(part):
+            return "Clicar e digitar: um pedido de cada vez."
+        try:
+            d = validate(decide(part, cfg), cfg)
+        except Exception:  # noqa: BLE001 - same fail-closed rule as handle()
+            d = {"action": "clarify"}
+        if d["action"] not in ("run_preset", "escalate"):
+            return f"Não entendi a parte “{part[:80]}”. Pode pedir um passo de cada vez?"
+        steps.append(d)
+    return steps
+
+
+def describe(step: dict, cfg: dict) -> str:
+    if step["action"] == "search":
+        return f"pesquisar “{step['query'][:80]}” no navegador"
+    if step["action"] == "run_preset":
+        return f"executar '{step['preset']}'" + (f" ({step['game']['name']})" if step.get("game") else "")
+    return f"pedir para {brain_name(cfg)}: “{step['task'][:80]}”"
+
+
+def run_steps(text: str, steps: list[dict], cfg: dict, dry_run: bool, ask, pick, on_event, cancel) -> str:
+    """One question lists every step, even presets that never ask alone; the AI step still asks its own consent."""
+    listed = "\n".join(f"{i}. {describe(s, cfg)}" for i, s in enumerate(steps, 1))
+    log({"action": "chain", "steps": [s["action"] for s in steps], "input_len": len(text), "dry_run": dry_run})
+    if dry_run:
+        return listed + "\n(dry-run)"
+    if not ask(f'Entendi: "{text[:200]}"\nEm ordem:\n{listed}\nFazer?'):
+        return "(cancelado)"
+    outs = []
+    for s in steps:
+        if cancel and cancel.is_set():
+            outs.append("(cancelado)")
+            break
+        if s["action"] == "search":
+            webbrowser.open(SEARCH_URL + urllib.parse.quote_plus(s["query"]))
+            outs.append(f"pesquisei: {s['query']}")
+        elif s["action"] == "run_preset":
+            outs.append(run_preset(text, s, cfg, False, lambda q: True))
+        else:
+            outs.append(escalate_with_consent(s, cfg, False, ask, pick, on_event, cancel))
+            if outs[-1].endswith("(cancelado)"):  # said no to that step: the rest waits for a new request
+                break
+    return "\n".join(outs)
+
+
 def handle(text: str, cfg: dict, decide=intent_decide, dry_run=False, yes=False, yes_escalate=False, confirm=None,
            pick=None, on_event=None, cancel=None) -> str:
     """confirm: optional callable(question)->bool (e.g. the voice overlay); default is terminal/AGENT_CONFIRM_CMD."""
     ask = confirmed if confirm is None else (lambda q, y: y or confirm(q))
     if (req := screen.parse_request(text)):
         return handle_screen(text, req, cfg, dry_run, confirm or terminal_confirm, pick)
+    parts = chain_parts(text)
+    if len(parts) > 1 or web_query(text, False):
+        steps = plan(parts, cfg, decide)
+        if isinstance(steps, str):
+            return steps
+        return run_steps(text, steps, cfg, dry_run, lambda q: ask(q, False), pick, on_event, cancel)
     try:
         decision = validate(decide(text, cfg), cfg)
     except Exception as e:  # model missing / runtime error: fail closed, never guess an action

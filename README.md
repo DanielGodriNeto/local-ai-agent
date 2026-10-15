@@ -43,6 +43,13 @@ child processes). `daemon.mode` in the config: `leve` (default) frees the speech
 `unload_after_s` idle, about 53 MB before first use, ~400 MB while listening, ~145 MB after unloading; `rapido` keeps them
 loaded for instant start. The conversation memory survives either way. `python agentd.py --quit` stops it.
 
+## Chained requests
+
+"abre o terminal e me explica o que é git", "abre o navegador e pesquisa receita de bolo": up to 3 steps, split only
+before an action verb ("pesquisa arroz e feijão" stays one). One confirmation lists every step first; if any part is
+not understood, nothing runs; an AI step still asks its own consent. "pesquisa no google X" searches on its own.
+Clicks and typing are one request at a time.
+
 ## Voice
 
 - Speech detection: Silero VAD (bundled with faster-whisper), so fans, music and clicks do not count as speech.

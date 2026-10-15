@@ -235,3 +235,76 @@ def test_log_rotates_past_its_cap(tmp_path, monkeypatch):
         o.log({"action": "x", "i": i})
     old, new = (tmp_path / "agent.log.1.jsonl").read_text(), (tmp_path / "agent.log.jsonl").read_text()
     assert len(new) <= 100 + 60 and '"i": 9' in new and old and not (tmp_path / "agent.log.2.jsonl").exists()
+
+
+def test_chains_split_only_before_an_action_verb():
+    assert o.chain_parts("abre o navegador e pesquisa receita de bolo") == ["abre o navegador", "pesquisa receita de bolo"]
+    assert o.chain_parts("abre o terminal, depois me explica o que é git") == ["abre o terminal", "me explica o que é git"]
+    assert o.chain_parts("pesquisa arroz e feijão") == ["pesquisa arroz e feijão"]
+    assert o.chain_parts("explica como criar e rodar um script") == ["explica como criar e rodar um script"]
+    assert o.chain_parts("como abre o terminal e pesquisa algo?") == ["como abre o terminal e pesquisa algo?"]
+
+
+def chain(text, decide, yes=True):
+    asked = []
+    with mock.patch("os_adapter.launch") as launch, mock.patch("webbrowser.open") as web, \
+            mock.patch("orchestrator.escalate", return_value="resposta") as esc:
+        out = o.handle(text, CFG, decide=decide, confirm=lambda q: asked.append(q) or yes)
+    return out, asked, launch, web, esc
+
+
+BY_WORD = {"abre o navegador": {"action": "run_preset", "preset": "open_browser"},
+           "abre o terminal": {"action": "run_preset", "preset": "open_terminal"},
+           "trava a tela": {"action": "run_preset", "preset": "lock_screen"},
+           "me explica git": {"action": "escalate", "task": "me explica git", "mode": "task"}}
+
+
+def by_word(text, cfg):
+    return BY_WORD.get(text, {"action": "clarify", "reply": "?"})
+
+
+def test_open_the_browser_and_search_is_one_confirmed_search():
+    out, asked, launch, web, _ = chain("abre o navegador e pesquisa receita de pão & bolo", by_word)
+    assert len(asked) == 1 and "1. pesquisar “receita de pão & bolo” no navegador" in asked[0]
+    web.assert_called_once_with("https://duckduckgo.com/?q=receita+de+p%C3%A3o+%26+bolo")
+    launch.assert_not_called()
+
+
+def test_a_chain_asks_once_up_front_even_for_presets_that_never_ask():
+    out, asked, launch, web, _ = chain("abre o terminal e trava a tela", by_word, yes=False)
+    assert out == "(cancelado)" and "1. executar 'open_terminal'\n2. executar 'lock_screen'" in asked[0]
+    launch.assert_not_called()
+    out, asked, launch, _, _ = chain("abre o terminal e trava a tela", by_word)
+    assert len(asked) == 1 and launch.call_count == 2
+
+
+def test_one_unclear_part_runs_nothing():
+    out, asked, launch, web, esc = chain("abre o terminal e abre o xyz", by_word)
+    assert "abre o xyz" in out and asked == [] and not launch.called and not web.called and not esc.called
+
+
+def test_the_ai_step_in_a_chain_still_asks_its_own_consent():
+    out, asked, launch, _, esc = chain("abre o terminal e me explica git", by_word)
+    assert len(asked) == 2 and "Pedir para" in asked[1] and launch.call_count == 1 and esc.called
+    assert out.endswith("resposta")
+
+
+def test_search_only_when_asked_for_the_web_or_after_the_browser():
+    out, asked, _, web, _ = chain("pesquisa no google previsão do tempo", by_word)
+    web.assert_called_once_with("https://duckduckgo.com/?q=previs%C3%A3o+do+tempo")
+    out, asked, _, web, _ = chain("abre o terminal e procura nos meus arquivos", by_word)
+    assert not web.called and "procura nos meus arquivos" in out  # that one is a task for the AI, not a web search
+
+
+def test_chains_refuse_clicks_and_more_than_three_steps():
+    out, asked, launch, _, _ = chain("abre o terminal e clica em salvar", by_word)
+    assert "um pedido de cada vez" in out and not asked and not launch.called
+    out, asked, launch, _, _ = chain("abre o terminal e abre o navegador e abre o terminal e trava a tela", by_word)
+    assert "3 passos" in out and not asked and not launch.called
+
+
+def test_saying_no_to_the_ai_step_stops_the_rest_of_the_chain():
+    answers = iter([True, False])
+    with mock.patch("os_adapter.launch") as launch, mock.patch("orchestrator.escalate") as esc:
+        out = o.handle("me explica git e abre o terminal", CFG, decide=by_word, confirm=lambda q: next(answers))
+    assert out.endswith("(cancelado)") and not launch.called and not esc.called
