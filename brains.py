@@ -317,6 +317,22 @@ def first_ollama_model(base: str) -> Optional[str]:
     return models[0] if models else None
 
 
+def ollama_warm(cfg: dict, model: str) -> None:
+    """Load the model into memory now (an empty prompt only loads it), so the real question skips the cold start."""
+    url = loopback(cfg["brain"]["ollama"]["url"])
+    if not url:
+        return
+    conn = http.client.HTTPConnection(url.hostname, url.port or 80, timeout=cfg["brain"]["timeout_s"])
+    try:
+        conn.request("POST", url.path.rstrip("/") + "/api/generate", json.dumps({"model": model, "keep_alive": "5m"}),
+                     {"Content-Type": "application/json"})
+        conn.getresponse().read()
+    except (OSError, http.client.HTTPException):
+        pass
+    finally:
+        conn.close()
+
+
 def ollama_image(cfg: dict, model: str, prompt: str, png: bytes, cancel: threading.Event) -> str:
     """One question about one image to a local vision model: the image never leaves the PC. "" on any failure."""
     import base64

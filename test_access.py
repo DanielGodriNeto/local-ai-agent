@@ -231,3 +231,12 @@ def test_typing_asks_first_and_checks_the_window():
     desk = FakeDesk()
     desk.focus_ok = False
     assert "não digitei" in run({"do": "type", "text": "x"}, desk)[0]
+
+
+def test_the_local_vision_model_starts_loading_before_it_is_needed(monkeypatch):
+    warmed = threading.Event()
+    monkeypatch.setattr(access.brains, "ollama_models", lambda base: ["vl"])
+    monkeypatch.setattr(access.brains, "ollama_warm", lambda cfg, model: model == "vl" and warmed.set())
+    assert access.local_vision({"brain": {"ollama": {"url": "http://127.0.0.1:11434", "vision_model": "vl"}}},
+                               threading.Event())
+    assert warmed.wait(2)

@@ -197,6 +197,7 @@ def run(cmd: dict, cfg: dict, desk, hear: Callable[[str], Optional[str]], confir
         return grid(desk, t, hear, cancel)
     if not t:
         return "Não achei nenhuma janela."
+    local = ask_local or local_vision(cfg, cancel)  # checked now so the model loads while the buttons are listed
     found = within(lambda: desk.find(t), FIND_S, cancel)
     if cancel.is_set():
         return "(cancelado)"
@@ -206,7 +207,7 @@ def run(cmd: dict, cfg: dict, desk, hear: Callable[[str], Optional[str]], confir
     items, tier = rank(cmd["name"], inside)
     if not items:
         return by_ai(cmd, cfg, desk, t, confirm, cancel, ask_ai or (lambda p, d: _ask_brain(cfg, p, d, cancel)),
-                     ask_local or local_vision(cfg, cancel))
+                     local)
     item = items[0]
     if len(items) > 1 or tier < 3:  # only one exact name clicks at once: "salvar" must never hit "Não salvar" unasked
         i = pick("Qual deles?", [f"{it['name']} ({it['type']})" for it in items[:9]])
@@ -259,10 +260,12 @@ def grid(desk, t: Optional[dict], hear, cancel: threading.Event) -> str:
 
 
 def local_vision(cfg: dict, cancel: threading.Event) -> Optional[Callable[[str, bytes], str]]:
-    """The local vision model when Ollama has it installed: then the image never leaves the PC."""
+    """The local vision model when Ollama has it installed: then the image never leaves the PC.
+    Starts loading it in the background: a cold load is most of the wait."""
     model = cfg.get("brain", {}).get("ollama", {}).get("vision_model")
     if not model or model not in brains.ollama_models(cfg["brain"]["ollama"]["url"]):
         return None
+    threading.Thread(target=brains.ollama_warm, args=(cfg, model), daemon=True).start()
     return lambda prompt, png: brains.ollama_image(cfg, model, prompt, png, cancel)
 
 
