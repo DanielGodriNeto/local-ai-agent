@@ -54,6 +54,7 @@ def test_choice_by_number_key_and_close_answers_none():
     ov = overlay.Overlay(UI)
     t, box = ask_in_thread(ov.choose, "Qual?", ["Chrome", "Firefox"])
     pump_until(lambda: len(buttons(ov)) == 3)  # two options and Cancelar
+    ov._armed = 0  # past the arming delay
     ov._key(QKeyEvent(QKeyEvent.Type.KeyPress, Qt.Key.Key_2, Qt.KeyboardModifier.NoModifier, "2"))
     t.join(2)
     assert box == [1]
@@ -111,3 +112,43 @@ def test_corner_pill_shows_one_line_and_opens_on_click():
     assert ov.kind == "main" and ov.body.text() == answer and not ov.closed.is_set()
     ov._click()
     assert ov.closed.is_set()
+
+
+def key(ov, k, text=""):
+    ov._key(QKeyEvent(QKeyEvent.Type.KeyPress, k, Qt.KeyboardModifier.NoModifier, text))
+
+
+def test_keys_typed_as_a_question_pops_up_never_answer_it():
+    ov = overlay.Overlay(UI)
+    t, box = ask_in_thread(ov.ask, "Enviar a imagem?")
+    pump_until(lambda: len(buttons(ov)) == 2)
+    key(ov, Qt.Key.Key_Return)  # meant for another window
+    t.join(0.2)
+    assert t.is_alive() and box == []
+    ov._armed = 0
+    ov._default.setFocus()
+    assert ov._default.text() == "Não"
+    ov._default.click()  # what Enter does to the focused button
+    t.join(2)
+    assert box == [False]
+    t, box = ask_in_thread(ov.choose, "Qual?", ["A", "B"])
+    pump_until(lambda: len(buttons(ov)) == 3)
+    key(ov, Qt.Key.Key_1, "1")
+    t.join(0.2)
+    assert t.is_alive()
+    ov.close()
+    t.join(2)
+    assert box == [None]
+
+
+def test_background_question_opens_the_card_without_taking_focus():
+    ov = overlay.Overlay(UI | {"corner": {**UI["main"], "anchor": "se", "x_pct": 99, "y_pct": 98}})
+    ov.to_corner()
+    pump_until(lambda: ov.kind == "corner")
+    activated = []
+    ov.win.activateWindow = lambda: activated.append(1)
+    t, box = ask_in_thread(ov.ask, "Continuar?")
+    pump_until(lambda: ov.kind == "main" and len(buttons(ov)) == 2)
+    assert not activated
+    ov.close()
+    t.join(2)

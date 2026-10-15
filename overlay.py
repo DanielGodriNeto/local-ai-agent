@@ -9,6 +9,7 @@ Demo: python overlay.py "texto" [corner|ask|choose]
 import ctypes
 import sys
 import threading
+import time
 from typing import Optional
 
 from PySide6.QtCore import QEasingCurve, QObject, QPoint, QPropertyAnimation, QRectF, Qt, QVariantAnimation, Signal, Slot
@@ -21,6 +22,7 @@ import config
 
 FONTS = ("Segoe UI Variable Text", "SF Pro Text", "Segoe UI", "Cantarell", "Noto Sans")
 LISTEN, GREEN, IDLE, RED = "accent", "done", "idle", "error"  # state keys, resolved by the palette
+ARM_S = 0.5  # a question ignores keys this long after it appears
 LONG = 280  # characters; longer text is laid out for reading (smaller, left-aligned, selectable)
 ANCHORS = {"n": (0.5, 0), "s": (0.5, 1), "c": (0.5, 0.5), "ne": (1, 0), "nw": (0, 0), "se": (1, 1), "sw": (0, 1)}
 MARGIN = 28  # transparent room around the card for its shadow
@@ -190,6 +192,7 @@ class Overlay:
         self._expandable = False  # a corner pill that opens into the full card when clicked
         self._answer = None  # (Event, [value]) while a question/choice is pending
         self._choices, self._shown, self._anims, self._default = 0, False, [], None
+        self._armed = 0.0  # keys answer a question only after this time.monotonic()
         self._build()
         self._bridge = Bridge(self.win)
         self._draw()
@@ -309,6 +312,11 @@ class Overlay:
             if self.closed.is_set():
                 return
             self._state, self._label, self._fg, self._ask = LISTEN, question, "fg", options
+            self._armed = time.monotonic() + ARM_S
+            if self.kind == "corner":  # a background task asking: open the card, but never take the keyboard
+                self.kind = "main"
+                self._draw()
+                return
             self._draw()
             self.win.activateWindow()
             self.win.raise_()
@@ -332,12 +340,12 @@ class Overlay:
         key, digit = e.key(), e.text()
         if key == Qt.Key.Key_Escape:
             self._reply(None) if self._answer else self._close()
+        elif self._answer and time.monotonic() < self._armed:
+            return  # typing meant for another window when the question popped up: it must not answer it
         elif key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
             focus = self.win.focusWidget()
-            if isinstance(focus, QPushButton):
+            if isinstance(focus, QPushButton):  # the text box sends on its own; nothing focused answers nothing
                 focus.click()
-            elif not isinstance(focus, QLineEdit):  # the text box sends on its own
-                self._reply(True)
         elif self._choices and digit.isdigit() and 1 <= int(digit) <= self._choices:
             self.resolve_choice(int(digit) - 1)
 
@@ -398,7 +406,9 @@ class Overlay:
             row.setContentsMargins(0, 0, 0, 0)
             row.addStretch()
             for label, act, look in (("Não", lambda: self._reply(None), quiet), ("Sim", lambda: self._reply(True), loud)):
-                b = self._default = QPushButton(label)  # Sim, the last one, gets the focus
+                b = QPushButton(label)
+                if label == "Não":  # the focus: a stray Enter answers no
+                    self._default = b
                 b.setStyleSheet(base + f"QPushButton {{ {look} }}")
                 b.clicked.connect(act)
                 row.addWidget(b)
