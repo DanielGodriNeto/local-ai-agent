@@ -47,3 +47,47 @@ def test_listen_returns_final_text_and_includes_preroll():
 
 def test_listen_none_when_nothing_said():
     assert L.listen(iter([SILENCE] * 80), L.Segmenter(no_speech_s=2.0), lambda _a: "x", lambda _t: None) is None
+
+
+class FakeUI:
+    def __init__(self):
+        import threading
+        self.closed, self.texts, self.holds = threading.Event(), [], []
+
+    def status(self, *_a):
+        pass
+
+    def text(self, s, *_a):
+        self.texts.append(s)
+
+    def hold(self, seconds):
+        self.holds.append(seconds)
+
+    def close(self):
+        self.closed.set()
+
+
+def test_long_answer_is_kept_whole_streamed_and_stays_up(monkeypatch):
+    long = "palavra " * 625  # 5,000 characters
+
+    def handle(text, cfg, on_event=None, **_kw):
+        for i in range(0, len(long), 1000):
+            on_event(type("E", (), {"kind": "text", "text": long[i:i + 1000]})())
+        return long
+
+    monkeypatch.setattr(L.o, "handle", handle)
+    ui, blocks = FakeUI(), iter([SILENCE] * 2 + [TONE] * 5 + [SILENCE] * 12)
+    L.session(ui, L.o.load_config(), blocks, models=lambda: (lambda _a: "conta uma historia", None))
+    assert ui.texts[-1] == long.strip() and L.HISTORY[-1] == ("conta uma historia", long.strip())
+    assert len(ui.texts[-2]) == 5000  # the streamed text grew to the full answer
+    assert ui.holds == [None]  # stays until dismissed
+
+
+def test_short_answer_fades():
+    ui = FakeUI()
+    L.o.handle, real = (lambda *a, **k: "preset: open_browser"), L.o.handle
+    try:
+        L.session(ui, L.o.load_config(), iter([TONE] * 5 + [SILENCE] * 12), models=lambda: (lambda _a: "abre", None))
+    finally:
+        L.o.handle = real
+    assert ui.holds == [4]

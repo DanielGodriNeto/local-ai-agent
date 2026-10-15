@@ -21,6 +21,7 @@ import make_logo
 FONT_DIR = Path(__file__).parent / "fonts"
 FONTS = ("Josefin Sans", "JetBrains Mono", "Cascadia Code", "Consolas", "DejaVu Sans Mono", "Courier New")
 LISTEN, GREEN, IDLE, RED = "accent", "accent", "idle", "error"  # semantic state keys, resolved via ui["colors"]
+LONG = 280  # characters; longer text is laid out for reading (smaller, left-aligned)
 KEY = "#010203"  # transparent key colour (Windows)
 ANCHORS = {"n": (0.5, 0), "s": (0.5, 1), "c": (0.5, 0.5), "ne": (1, 0), "nw": (0, 0), "se": (1, 1), "sw": (0, 1)}
 
@@ -71,12 +72,18 @@ class Overlay:
         self._answer = None  # (Event, [value]) while a question/choice is pending
         self._choices = 0
         self._drag = (0, 0)
+        self._body: Optional[tk.Canvas] = None  # scrolling text area, only when the text is taller than the screen
         r.bind("<Return>", lambda _e: self._reply(True))
         r.bind("<Escape>", lambda _e: self._reply(None) if self._answer else self._close())
         r.bind("<Key>", self._key)
         r.bind("<ButtonPress-1>", self._press)
         r.bind("<B1-Motion>", self._motion)
         r.bind("<ButtonRelease-1>", self._release)
+        r.bind("<MouseWheel>", lambda e: self._scroll(-1 if e.delta > 0 else 1))
+        r.bind("<Button-4>", lambda _e: self._scroll(-1))  # X11 wheel
+        r.bind("<Button-5>", lambda _e: self._scroll(1))
+        r.bind("<Up>", lambda _e: self._scroll(-1))
+        r.bind("<Down>", lambda _e: self._scroll(1))
         r.after(40, self._pump)
         self._draw()
 
@@ -107,8 +114,8 @@ class Overlay:
             self._answer[1][0] = index
             self._answer[0].set()
 
-    def hold(self, seconds: float) -> None:
-        """Keep the overlay up (called from the worker thread); Esc/click ends it early."""
+    def hold(self, seconds: Optional[float]) -> None:
+        """Keep the overlay up (called from the worker thread); Esc/click ends it early. None = until then."""
         self.closed.wait(seconds)
         self.close()
 
@@ -151,6 +158,10 @@ class Overlay:
     def _key(self, e) -> None:
         if self._choices and e.char.isdigit() and 1 <= int(e.char) <= self._choices:
             self.resolve_choice(int(e.char) - 1)
+
+    def _scroll(self, units: int) -> None:
+        if self._body:
+            self._body.yview_scroll(units * 3, "units")  # 3 lines per wheel notch
 
     def _press(self, e) -> None:
         if self.edit:
@@ -201,10 +212,14 @@ class Overlay:
         r, c, k = self.root, self.canvas, self.ui[self.kind]
         sw, sh = r.winfo_screenwidth(), r.winfo_screenheight()
         asking, pad = bool(self._hint), k["pad"]
-        size = 16 if asking else text_size(self._label, k["size_min"], k["size_max"])
-        spec = (self._font(), size, "normal" if asking else "bold")
-        wide = tkfont.Font(family=spec[0], size=size, weight=spec[2]).measure(self._label.split("\n")[0])
+        reading = asking or len(self._label) > LONG  # questions and long answers: calm body text, not a headline
+        size = 16 if reading else text_size(self._label, k["size_min"], k["size_max"])
+        spec = (self._font(), size, "normal" if reading else "bold")
+        font = tkfont.Font(family=spec[0], size=size, weight=spec[2])
+        wide = font.measure(self._label.split("\n")[0])
         max_w = int(sw * (0.5 if asking else k["max_width_pct"] / 100))
+        if reading:
+            max_w = min(max_w, font.measure("0") * 70)  # ~70 characters per line reads best
         logo = self._logo(self._state, k["logo_px"])
         c.delete("all")
         fg = self._color(self._fg)
@@ -221,9 +236,23 @@ class Overlay:
     def _draw_column(self, c, spec, wide, max_w, pad, logo, fg, k, asking):
         w = min(max_w, max(k["min_width"], wide + 2 * pad))
         top = 22 + (logo.height() if logo else 8)
+        long = len(self._label) > LONG
         t = c.create_text(w // 2, top + 18, text=self._label, fill=fg, anchor="n", width=w - 2 * pad,
-                          justify="center", font=spec)
+                          justify="left" if long else "center", font=spec)
         y1 = c.bbox(t)[3] if self._label else top + 18
+        if self._body:
+            self._body.destroy()
+            self._body = None
+        max_y = int(self.root.winfo_screenheight() * 0.8) - pad - (40 if asking else 0)
+        if y1 > max_y:  # taller than the screen: the text scrolls inside the card (wheel, arrows)
+            c.delete(t)
+            self._body = body = tk.Canvas(c, bg=self._color("bg"), highlightthickness=0, bd=0,
+                                          width=w - 2 * pad, height=max_y - top - 18,
+                                          yscrollincrement=tkfont.Font(font=spec).metrics("linespace"))
+            bt = body.create_text(0, 0, text=self._label, fill=fg, anchor="nw", width=w - 2 * pad, font=spec)
+            body.configure(scrollregion=body.bbox(bt))
+            c.create_window(pad, top + 18, window=body, anchor="nw")
+            y1 = max_y
         if asking:
             hint = c.create_text(w // 2, y1 + 18, text=self._hint, fill=self._color("hint"), anchor="n",
                                  font=(spec[0], 11))

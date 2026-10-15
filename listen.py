@@ -15,6 +15,8 @@ import orchestrator as o
 import overlay
 
 RATE, BLOCK_S = 16000, 0.1
+SHORT = 120  # answers up to this length fade after a few seconds; longer ones stay until Esc, click or hotkey
+HISTORY: deque = deque(maxlen=10)  # (what was said, answer); RAM only, gone when the agent stops
 
 
 class Segmenter:
@@ -150,12 +152,21 @@ def session(ui: overlay.Overlay, cfg: dict, blocks: Optional[Iterator[np.ndarray
                 ui.status("TRABALHANDO", overlay.IDLE)
             return ok
 
+        streamed = []
+
+        def on_event(e) -> None:  # the answer appears as the AI writes it; tool use shows in the tag
+            if e.kind == "tool":
+                ui.status(e.text[:40], overlay.IDLE)
+            else:
+                streamed.append(e.text)
+                ui.text("".join(streamed))
+
         out = o.handle(text, cfg, decide=decide, confirm=confirm,
-                       pick=lambda q, opts: ui.choose(q, opts), cancel=cancel)
+                       pick=lambda q, opts: ui.choose(q, opts), on_event=on_event, cancel=cancel).strip() or "Feito."
+        HISTORY.append((text, out))
         ui.status("PRONTO", overlay.GREEN)
-        out = out.strip()[:600]
-        ui.text(out or "Feito.")
-        ui.hold(min(20.0, max(3.0, 2 + len(out) / 18)))
+        ui.text(out)
+        ui.hold(4 if len(out) <= SHORT else None)
     except Exception as e:  # never leave the overlay stuck on screen
         ui.status("ERRO", overlay.RED)
         ui.text(f"{type(e).__name__}: {e}"[:300], overlay.RED)
