@@ -219,7 +219,10 @@ def session(ui: overlay.Overlay, cfg: dict, blocks: Optional[Iterator[np.ndarray
         earcons.play("done", sound)
         ui.text(out)
         if voice and streamed:  # only the AI's answers are spoken, not preset results
-            voice.say(out, cancel)
+            try:
+                voice.say(out, cancel)
+            except Exception:  # noqa: BLE001 - a broken voice must not replace a good answer with an error
+                pass
         ui.hold(4 if len(out) <= SHORT else None)
     except Exception as e:  # never leave the overlay stuck on screen
         ui.status("ERRO", overlay.RED)

@@ -78,3 +78,29 @@ def test_listener_fires_once_and_pauses_while_busy(tmp_path):
     busy.start()
     wake.listen_forever({"wake": {"phrase": "hey jarvis"}}, fire, lambda: True, quit_event, chunks)
     assert fired == [1]  # a running session: the mic is not even opened
+
+
+def test_listener_survives_errors_and_gives_up_on_an_unrecorded_phrase(tmp_path, monkeypatch):
+    monkeypatch.setattr(wake, "LOG", tmp_path / "agentd.log")
+    quit_event, calls = threading.Event(), []
+
+    def broken_mic(stop):
+        calls.append(1)
+        if len(calls) == 2:
+            quit_event.set()
+        raise OSError("no input device")
+        yield  # noqa: unreachable - makes this a generator
+
+    monkeypatch.setattr(quit_event, "wait", lambda t=None: None)  # no 5 s back-off in the test
+    wake.listen_forever({"wake": {"phrase": "hey jarvis"}}, lambda: None, lambda: False, quit_event, broken_mic)
+    assert len(calls) == 2 and "no input device" in (tmp_path / "agentd.log").read_text()
+    quit_event.clear()
+    for f in ("melspectrogram.onnx", "embedding_model.onnx"):
+        shutil.copy(wake.MODEL_DIR / f, tmp_path / f)
+    done = threading.Thread(target=wake.listen_forever, args=({"wake": {"phrase": "nunca gravada"}}, lambda: None,
+                                                              lambda: False, quit_event, broken_mic, tmp_path))
+    done.start()
+    done.join(5)
+    alive = done.is_alive()
+    quit_event.set()
+    assert not alive  # gave up instead of looping forever

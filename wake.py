@@ -22,6 +22,7 @@ MODEL_FILES = {
 }
 RATE, CHUNK = 16000, 1280  # 80 ms: one speech embedding per chunk
 CUSTOM = MODEL_DIR / "custom.npz"
+LOG = Path.home() / ".local-ai-agent" / "agentd.log"  # the daemon runs without a console
 
 
 def session(path: Path):
@@ -119,6 +120,8 @@ def detector(cfg: dict, model_dir: Path = MODEL_DIR) -> tuple[Callable[[np.ndarr
     w = cfg["wake"]
     if w["phrase"].strip().lower() == "hey jarvis":
         return Jarvis(model_dir), w.get("threshold", 0.5)
+    if not (model_dir / "custom.npz").exists():
+        raise ValueError(f'grave a frase primeiro: python wake.py --record "{w["phrase"]}"')
     data = np.load(model_dir / "custom.npz")
     if str(data["phrase"]) != w["phrase"]:
         raise ValueError(f'grave a frase primeiro: python wake.py --record "{w["phrase"]}"')
@@ -150,17 +153,33 @@ def mic_chunks(stop) -> Iterator[np.ndarray]:
 def listen_forever(cfg: dict, fire: Callable[[], None], busy: Callable[[], bool], quit_event,
                    chunks: Callable = mic_chunks, model_dir: Path = MODEL_DIR) -> None:
     """Runs in the daemon. The mic is closed while a session runs (it has its own), so the agent never wakes itself."""
+    import contextlib
     import time
+    import traceback
     while not quit_event.is_set():
         if busy():
             time.sleep(0.2)
             continue
-        feats, (score, threshold) = Features(model_dir), detector(cfg, model_dir)
-        for chunk in chunks(lambda: busy() or quit_event.is_set()):
-            if score(feats(chunk)) >= threshold:
-                fire()
-                time.sleep(0.5)  # let the session open before checking busy() again
-                break
+        heard = False
+        try:
+            feats, (score, threshold) = Features(model_dir), detector(cfg, model_dir)
+            with contextlib.closing(chunks(lambda: busy() or quit_event.is_set())) as stream:
+                for chunk in stream:
+                    if score(feats(chunk)) >= threshold:
+                        heard = True
+                        break
+        except Exception as e:  # no mic, a broken recording...: log it and retry, never kill the daemon silently
+            LOG.parent.mkdir(parents=True, exist_ok=True)
+            with open(LOG, "a", encoding="utf-8") as log:
+                log.write(f"wake: {e}\n")
+                traceback.print_exc(file=log)
+            if isinstance(e, ValueError):  # the phrase in the config was never recorded: retrying will not help
+                return
+            quit_event.wait(5)
+            continue
+        if heard:  # the mic is closed by now, so the session can open its own
+            fire()
+            time.sleep(0.5)  # let the session start before checking busy() again
 
 
 def record_takes(n: int = 3, seconds: float = 2.5) -> list:
