@@ -221,8 +221,8 @@ def by_ai(cmd: dict, cfg: dict, desk, t: dict, confirm, cancel: threading.Event,
     heard = f"Entendi: “{cmd.get('said', name)[:200]}”\n"
     if brain != "claude":  # ponytail: Claude Code reads the image file; Codex/Ollama would need an image flag
         return f"Não achei “{name}”. Diga “mostrar grade” para clicar por números."
-    if not confirm(f"{heard}Não achei “{name}” em “{t['title'][:80]}”.\nEnviar uma imagem só desta janela para "
-                   f"{orchestrator.brain_name(cfg)}? Pode ter senhas e mensagens."):
+    if not confirm(f"{heard}Não achei “{name}” em “{t['title'][:80]}”.\nEnviar {getattr(desk, 'SHOT', 'uma imagem só desta janela')} "
+                   f"para {orchestrator.brain_name(cfg)}? Pode ter senhas e mensagens."):
         return "(cancelado)"
     img = desk.capture(t)
     scale = min(1.0, AI_MAX_PX / max(img.size))
@@ -531,6 +531,7 @@ class HyprDesk:
     """Hyprland: the target and monitors from hyprctl, controls from AT-SPI, the window image from grim, clicks from
     ydotool (needs ydotoold running). The grid windows are moved by hyprctl, since Wayland apps can't place themselves."""
     GRID = "title:^(agent-grid)$"
+    SHOT = "uma imagem da área desta janela na tela (inclui o que estiver por cima dela)"
     BUTTONS = {"left": "0xC0", "right": "0xC1"}
     MAX_NODES = 5000  # ponytail: a whole-tree AT-SPI walk; a web page past this many nodes is cut short
 

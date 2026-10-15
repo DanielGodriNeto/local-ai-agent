@@ -4,6 +4,7 @@ from unittest import mock
 import orchestrator as o
 
 CFG = o.load_config()
+CFG = {**CFG, "brain": {**CFG["brain"], "use": "claude"}}  # not whatever CLI this machine has
 
 
 def run(decision, **kw):

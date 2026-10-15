@@ -7,6 +7,7 @@ Events travel over a loopback TCP socket, nothing is written to disk. The overla
 sanitised summary (tool + file name / first command word): never full commands, paths or file contents.
 """
 import json
+import ntpath  # splits on both slashes, so a Windows path shows as a name on any OS
 import os
 import re
 import socket
@@ -39,10 +40,10 @@ def describe(ev: dict) -> tuple[str, str] | None:
     if tool == "Bash":
         first = re.split(r"\s+", str(inp.get("command", "")).strip())[0] if inp.get("command") else ""
         # an env assignment (FOO=secret cmd) must never reach the screen
-        return "accent", "Rodando " + (os.path.basename(first) if first and "=" not in first else "um comando")
+        return "accent", "Rodando " + (ntpath.basename(first) if first and "=" not in first else "um comando")
     target = inp.get("file_path") or inp.get("notebook_path") or inp.get("path") or ""
     verb = TOOL_VERBS.get(tool, clean(tool, 24) or "Trabalhando")
-    return "accent", clean(f"{verb} {os.path.basename(str(target))}" if target else verb)
+    return "accent", clean(f"{verb} {ntpath.basename(str(target))}" if target else verb)
 
 
 def port() -> int:

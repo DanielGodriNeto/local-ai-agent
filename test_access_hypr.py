@@ -105,3 +105,7 @@ def test_desk_factory_picks_the_adapter(monkeypatch):
     assert access.desk(None) is None
     monkeypatch.setenv("HYPRLAND_INSTANCE_SIGNATURE", "x")
     assert isinstance(access.desk(None), access.HyprDesk)
+
+
+def test_consent_says_the_image_includes_what_covers_the_window():
+    assert "por cima" in access.HyprDesk.SHOT  # grim grabs the screen area, not the window alone
