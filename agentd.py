@@ -135,7 +135,8 @@ def run_daemon() -> None:
     root = tk.Tk()
     root.withdraw()
     v = cfg["voice"]
-    models = Models(lambda: (listen.LazyWhisper(v["model"], v["language"]), listen.preload_intent(cfg)),
+    models = Models(lambda: (listen.LazyWhisper(v["model"], v["language"]), listen.preload_intent(cfg),
+                             listen.speaker(cfg)),
                     d.get("unload_after_s", 300))
     if d.get("mode", "leve") == "rapido":
         models()

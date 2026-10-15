@@ -137,12 +137,12 @@ class Matcher:
         return {"action": "run_preset", "preset": top}
 
 
-def fetch_model(model_dir: Path = MODEL_DIR) -> None:
+def fetch_model(model_dir: Path = MODEL_DIR, files: Optional[dict] = None) -> None:
     """Download the pinned model files and verify each sha256; a mismatch deletes the file and raises."""
     import hashlib
     import urllib.request
 
-    for rel, (url, sha) in MODEL_FILES.items():
+    for rel, (url, sha) in (files or MODEL_FILES).items():
         dest = model_dir / rel
         if dest.exists() and hashlib.sha256(dest.read_bytes()).hexdigest() == sha:
             continue

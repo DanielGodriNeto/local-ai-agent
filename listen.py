@@ -14,6 +14,7 @@ import numpy as np
 import earcons
 import orchestrator as o
 import overlay
+import tts
 
 RATE, BLOCK_S = 16000, 0.1
 SHORT = 120  # answers up to this length fade after a few seconds; longer ones stay until Esc, click or hotkey
@@ -156,15 +157,23 @@ def preload_intent(cfg: dict) -> Callable[[str, dict], dict]:
     return lambda text, c: o.intent_decide(text, c, matcher)
 
 
+def speaker(cfg: dict) -> Optional[tts.Speaker]:
+    v = cfg["voice"]
+    return tts.Speaker(v["language"], v.get("speed", 1.0)) if v.get("tts", True) and tts.available() else None
+
+
 def session(ui: overlay.Overlay, cfg: dict, blocks: Optional[Iterator[np.ndarray]] = None,
             models: Optional[Callable[[], tuple]] = None, cancel: Optional[threading.Event] = None) -> None:
-    """models() -> (stt, decide) lets the daemon keep them loaded. Closing the overlay or cancel stops everything."""
+    """models() -> (stt, decide[, speaker]) lets the daemon keep them loaded. Closing the overlay or cancel stops
+    everything, including the voice."""
     v, cancel = cfg["voice"], cancel or threading.Event()
     try:
         ui.status("OUVINDO", overlay.LISTEN)
         sound = v.get("earcons", True)
         earcons.play("listen", sound)
-        stt, decide = models() if models else (LazyWhisper(v["model"], v["language"]), preload_intent(cfg))
+        stt, decide, *extra = models() if models else (LazyWhisper(v["model"], v["language"]), preload_intent(cfg),
+                                                        speaker(cfg))
+        voice = extra[0] if extra else None
         seg = Segmenter(v["silence_s"], v["no_speech_timeout_s"], v["max_s"], v["min_rms"],
                         vad=SileroVAD() if v.get("vad", "silero") == "silero" else None)
         stop = threading.Event()
@@ -195,6 +204,8 @@ def session(ui: overlay.Overlay, cfg: dict, blocks: Optional[Iterator[np.ndarray
         streamed = []
 
         def on_event(e) -> None:  # the answer appears as the AI writes it; tool use shows in the tag
+            if voice and not streamed:
+                voice.warm()  # load the voice while the AI is still answering
             if e.kind == "tool":
                 ui.status(e.text[:40], overlay.IDLE)
             else:
@@ -207,6 +218,8 @@ def session(ui: overlay.Overlay, cfg: dict, blocks: Optional[Iterator[np.ndarray
         ui.status("PRONTO", overlay.GREEN)
         earcons.play("done", sound)
         ui.text(out)
+        if voice and streamed:  # only the AI's answers are spoken, not preset results
+            voice.say(out, cancel)
         ui.hold(4 if len(out) <= SHORT else None)
     except Exception as e:  # never leave the overlay stuck on screen
         ui.status("ERRO", overlay.RED)

@@ -28,6 +28,16 @@ child processes). `daemon.mode` in the config: `leve` (default) frees the speech
 `unload_after_s` idle, about 53 MB before first use, ~400 MB while listening, ~145 MB after unloading; `rapido` keeps them
 loaded for instant start. The conversation memory survives either way. `python agentd.py --quit` stops it.
 
+## Voice
+
+- Speech detection: Silero VAD (bundled with faster-whisper), so fans, music and clicks do not count as speech.
+- Transcription: Whisper `small` (`voice.model`; `base` is lighter and less accurate).
+- Short chimes when it starts listening, hears you, finishes or fails (`voice.earcons`).
+- Spoken answers (optional): `pip install kokoro-onnx==0.6.1` then `python tts.py` (downloads ~340 MB, sha256-checked).
+  Voices for pt, en, es, fr, it, hi, ja, zh follow `voice.language`. Only AI answers are spoken, up to ~400 characters;
+  the hotkey or Esc cuts it. Uses ~430 MB while loaded; `leve` mode frees it when idle. Its phonemizer and espeak-ng
+  are GPL-3 (installed by you, not shipped here).
+
 ## Screen reading
 
 Monitors are numbered: **1 = primary**, the rest left to right (`python monitors.py` lists them). Ask by voice:

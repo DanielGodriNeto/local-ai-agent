@@ -113,6 +113,8 @@
     "model": "small",
     "vad": "silero",
     "earcons": true,
+    "tts": true,
+    "speed": 1.0,
     "language": "pt",
     "silence_s": 1.0,
     "no_speech_timeout_s": 6,
