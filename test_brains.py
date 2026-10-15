@@ -90,9 +90,34 @@ def test_conversation_forgets_after_idle_or_brain_switch():
 
 def test_ollama_must_be_loopback():
     cfg = {"brain": {**CFG["brain"], "ollama": {"url": "http://evil.example:11434", "model": "m"}}}
-    with mock.patch("urllib.request.urlopen") as net:
+    with mock.patch("http.client.HTTPConnection") as net:
         assert "localhost" in brains.run_ollama(cfg, "oi", brains.Conversation(), lambda e: None, threading.Event())
+        assert brains.first_ollama_model("http://evil.example:11434") is None
         net.assert_not_called()
+
+
+def test_ollama_cancel_works_while_the_model_is_still_loading():
+    import socket
+    srv = socket.create_server(("127.0.0.1", 0))  # accepts, never answers: a model still loading
+    port = srv.getsockname()[1]
+    cfg = {"brain": {**CFG["brain"], "ollama": {"url": f"http://127.0.0.1:{port}", "model": "m"}}}
+    cancel = threading.Event()
+    threading.Timer(0.3, cancel.set).start()
+    t = time.time()
+    with pytest.raises(brains.Cancelled):
+        brains.run_ollama(cfg, "oi", brains.Conversation(), lambda e: None, cancel)
+    assert time.time() - t < 3
+    srv.close()
+
+
+def test_failed_resume_drops_the_session(tmp_path):
+    cfg = {"brain": {**CFG["brain"], "workdir": str(tmp_path)}}
+    conv = brains.Conversation().current("claude")
+    conv.session = "stale"
+    err = [{"type": "result", "is_error": True, "result": "No conversation found", "session_id": "stale"}]
+    with mock.patch("shutil.which", return_value="claude"), mock.patch("brains.stream_lines", fake_stream(err)):
+        assert brains.ask(cfg, "oi", "quick", conv).startswith("Erro")
+    assert conv.session is None
 
 
 CHILD = """

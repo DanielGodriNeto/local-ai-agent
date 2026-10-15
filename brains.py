@@ -4,16 +4,17 @@ uses the login the user already has. Text and tool use stream as events; a conve
     ask(cfg, prompt, mode, conv, on_event, cancel) -> final text
 mode "quick": short answer, no tools, fast model.  mode "task": read-only file tools in the work folder.
 """
+import http.client
 import json
 import os
 import shutil
 import signal
+import socket
 import subprocess
 import sys
 import threading
 import time
 import urllib.parse
-import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Iterator, Optional
@@ -56,12 +57,44 @@ class Cancelled(Exception):
 # ---- process edge -------------------------------------------------------------------------------------------------
 
 def kill_tree(proc: subprocess.Popen) -> None:
-    if proc.poll() is not None:
-        return
     if sys.platform == "win32":
-        subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"], capture_output=True)
-    else:
-        os.killpg(proc.pid, signal.SIGTERM)
+        # ponytail: children left behind by a CLI that already exited escape; a Job Object would catch them
+        if proc.poll() is None:
+            subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"], capture_output=True)
+        return
+    try:  # the group outlives its leader, so kill it even after the CLI exits
+        if proc.poll() is None:
+            os.killpg(proc.pid, signal.SIGTERM)
+            try:
+                proc.wait(2)
+            except subprocess.TimeoutExpired:
+                pass
+        os.killpg(proc.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+
+
+def watch(cancel: threading.Event, deadline: float, stop: Callable[[], None]) -> threading.Event:
+    """Call stop() once on cancel or past the deadline. Set the returned event to end the watch."""
+    done = threading.Event()
+
+    def loop():
+        while not done.wait(0.1):
+            if cancel.is_set() or time.time() > deadline:
+                stop()
+                return
+
+    threading.Thread(target=loop, daemon=True).start()
+    return done
+
+
+def interrupted(cancel: threading.Event, deadline: float, timeout: float) -> bool:
+    """Raise Cancelled/TimeoutError if the watch fired; False otherwise."""
+    if cancel.is_set():
+        raise Cancelled
+    if time.time() > deadline:
+        raise TimeoutError(f"sem resposta em {timeout:.0f} s")
+    return False
 
 
 def stream_lines(argv: list[str], stdin_text: str, cwd: Path, timeout: float, cancel: threading.Event) -> Iterator[str]:
@@ -70,27 +103,21 @@ def stream_lines(argv: list[str], stdin_text: str, cwd: Path, timeout: float, ca
     proc = subprocess.Popen(argv, cwd=cwd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                             text=True, encoding="utf-8", errors="replace", creationflags=flags,
                             start_new_session=sys.platform != "win32")
-    stopped, deadline = threading.Event(), time.time() + timeout
-
-    def watchdog():
-        while not stopped.wait(0.1):
-            if cancel.is_set() or time.time() > deadline:
-                kill_tree(proc)
-                return
-
-    threading.Thread(target=watchdog, daemon=True).start()
+    deadline = time.time() + timeout
+    done = watch(cancel, deadline, lambda: kill_tree(proc))
     try:
-        proc.stdin.write(stdin_text)
-        proc.stdin.close()
+        try:
+            proc.stdin.write(stdin_text)
+            proc.stdin.close()
+        except OSError:  # the watch killed it mid-write: report cancel/timeout, not a broken pipe
+            if not interrupted(cancel, deadline, timeout):
+                raise
         yield from proc.stdout
         proc.wait()
     finally:
-        stopped.set()
+        done.set()
         kill_tree(proc)
-    if cancel.is_set():
-        raise Cancelled
-    if time.time() > deadline:
-        raise TimeoutError(f"sem resposta em {timeout:.0f} s")
+    interrupted(cancel, deadline, timeout)
 
 
 # ---- adapters: argv builders + pure line parsers ------------------------------------------------------------------
@@ -176,42 +203,78 @@ def run_cli(name: str, cfg: dict, prompt: str, mode: str, conv: Conversation, on
         final = done if done is not None else final
     answer = final if final is not None else "".join(chunks)
     conv.remember(session, prompt, answer)
+    if answer.startswith("Erro: "):
+        conv.session = None  # a stale or broken session must not fail every retry
     return answer
+
+
+def loopback(url: str) -> Optional[urllib.parse.SplitResult]:
+    u = urllib.parse.urlsplit(url)
+    return u if u.scheme == "http" and u.hostname in LOOPBACK else None
+
+
+def abort(sock: Optional[socket.socket]) -> None:
+    """Wake a read blocked on a model that is still loading. shutdown() does it on POSIX, only closing the handle does
+    on Windows; detach() first, because the open response file would otherwise keep the handle alive."""
+    if sock is None:
+        return
+    try:
+        sock.shutdown(socket.SHUT_RDWR)
+    except OSError:
+        pass
+    try:
+        socket.socket(fileno=sock.detach()).close()
+    except (OSError, ValueError):  # already closed by the normal path
+        pass
 
 
 def run_ollama(cfg: dict, prompt: str, conv: Conversation, on_event, cancel) -> str:
     """Local model over Ollama's HTTP API. Loopback only; the conversation is replayed from RAM."""
-    o = cfg["brain"]["ollama"]
-    url = urllib.parse.urlsplit(o["url"])
-    if url.scheme != "http" or url.hostname not in LOOPBACK:
+    o, timeout = cfg["brain"]["ollama"], cfg["brain"]["timeout_s"]
+    url = loopback(o["url"])
+    if not url:
         return "Ollama precisa estar em localhost"
     model = o.get("model") or first_ollama_model(o["url"])
     if not model:
         return "Nenhum modelo no Ollama (rode: ollama pull <modelo>)"
     messages = [{"role": r, "content": t} for r, t in conv.turns] + [{"role": "user", "content": prompt}]
-    req = urllib.request.Request(o["url"].rstrip("/") + "/api/chat", method="POST",
-                                 data=json.dumps({"model": model, "messages": messages, "stream": True}).encode(),
-                                 headers={"Content-Type": "application/json"})
+    body = json.dumps({"model": model, "messages": messages, "stream": True})
+    conn = http.client.HTTPConnection(url.hostname, url.port or 80, timeout=timeout)
+    conn.connect()
+    deadline = time.time() + timeout
+    done = watch(cancel, deadline, lambda: abort(conn.sock))
     chunks = []
-    with urllib.request.urlopen(req, timeout=cfg["brain"]["timeout_s"]) as res:
-        for line in res:
-            if cancel.is_set():
-                raise Cancelled
+    try:
+        conn.request("POST", url.path.rstrip("/") + "/api/chat", body, {"Content-Type": "application/json"})
+        for line in conn.getresponse():
             piece = json.loads(line).get("message", {}).get("content", "")
             if piece:
                 chunks.append(piece)
                 on_event(Event("text", piece))
+    except (OSError, http.client.HTTPException, ValueError):
+        if not interrupted(cancel, deadline, timeout):
+            raise
+    finally:
+        done.set()
+        conn.close()
+    interrupted(cancel, deadline, timeout)
     answer = "".join(chunks)
     conv.remember(None, prompt, answer)
     return answer
 
 
 def first_ollama_model(base: str) -> Optional[str]:
-    try:
-        with urllib.request.urlopen(base.rstrip("/") + "/api/tags", timeout=2) as res:
-            models = json.load(res).get("models", [])
-    except (OSError, ValueError):
+    url = loopback(base)
+    if not url:
         return None
+    conn = http.client.HTTPConnection(url.hostname, url.port or 80, timeout=2)
+    try:
+        conn.request("GET", url.path.rstrip("/") + "/api/tags")
+        models = json.load(conn.getresponse()).get("models", [])
+    except (OSError, http.client.HTTPException, ValueError):
+        return None
+    finally:
+        conn.close()
     return models[0]["name"] if models else None
 
 
