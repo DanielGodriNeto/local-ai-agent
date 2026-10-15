@@ -12,8 +12,17 @@ Windows and Linux (Hyprland). The Linux scripts are untested on real hardware.
 
 ## Setup
 
+One command creates `.venv`, installs the exact versions (each file checked by hash) and runs the first-run checks:
+
 ```bash
-pip install --require-hashes -r requirements.txt   # exact versions, each file checked by hash (edit requirements.in to change them)
+powershell -ExecutionPolicy Bypass -File setup.ps1   # Windows
+./setup.sh                                           # Linux
+```
+
+By hand (then use `.venv` python, or your own, for the commands below):
+
+```bash
+pip install --require-hashes -r requirements.txt   # edit requirements.in to change versions; a monthly workflow refreshes the lock
 python onboarding.py            # checks the AI and the mic, downloads the models (also opens on the agent's first run)
 python intent.py               # or just the intent model (~125 MB, pinned and sha256-checked) into models/e5/
 python game_indexer.py          # optional: index Steam games into games.json
