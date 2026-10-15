@@ -1,0 +1,5 @@
+line-length = 120
+
+[lint]
+select = ["E", "F", "W"]  # real mistakes only (unused or undefined names, syntax), not style
+ignore = ["E501", "E731"]  # long hash/table lines and small lambdas are this codebase's style

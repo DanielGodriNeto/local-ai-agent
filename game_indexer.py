@@ -4,7 +4,6 @@ import re
 import sys
 from pathlib import Path
 
-import os_adapter
 
 HERE = Path(__file__).parent
 STEAM_ROOTS = [Path(p).expanduser() for p in (

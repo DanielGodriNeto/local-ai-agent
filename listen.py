@@ -5,7 +5,6 @@ Bind this to a key (Hyprland: bind = SUPER, V, exec, python ~/.config/local-ai-a
 import queue
 import sys
 import threading
-import time
 from collections import deque
 from pathlib import Path
 from typing import Callable, Iterator, Optional

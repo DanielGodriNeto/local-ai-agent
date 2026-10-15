@@ -8,7 +8,6 @@ sanitised summary (tool + file name / first command word): never full commands, 
 """
 import json
 import ntpath  # splits on both slashes, so a Windows path shows as a name on any OS
-import os
 import re
 import socket
 import subprocess
