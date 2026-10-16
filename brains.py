@@ -3,6 +3,8 @@ uses the login the user already has. Text and tool use stream as events; a conve
 
     ask(cfg, prompt, mode, conv, on_event, cancel) -> final text
 mode "quick": short answer, no tools, fast model.  mode "task": read-only file tools in the work folder.
+Quick questions go to a small local model when brain.quick is "local" and it is installed (nothing leaves the PC);
+brain.quick "main" sends them to the main AI's fast model (Claude Haiku) instead.
 """
 import http.client
 import json
@@ -40,10 +42,15 @@ class Conversation:
     session: Optional[str] = None
     turns: list = field(default_factory=list)
     last: float = 0.0
+    shelf: dict = field(default_factory=dict)  # the other brains' memory: a quick local answer keeps Claude's session
 
     def current(self, brain: str) -> "Conversation":
-        if brain != self.brain or time.time() - self.last > self.idle_s:
-            self.brain, self.session, self.turns = brain, None, []
+        if time.time() - self.last > self.idle_s:
+            self.session, self.turns, self.shelf = None, [], {}
+        if brain != self.brain:
+            self.shelf[self.brain] = (self.session, self.turns)
+            self.brain = brain
+            self.session, self.turns = self.shelf.pop(brain, (None, []))
         return self
 
     def remember(self, session: Optional[str], prompt: str, answer: str) -> None:
@@ -263,17 +270,18 @@ def abort(sock: Optional[socket.socket]) -> None:
         pass
 
 
-def run_ollama(cfg: dict, prompt: str, conv: Conversation, on_event, cancel) -> str:
-    """Local model over Ollama's HTTP API. Loopback only; the conversation is replayed from RAM."""
+def run_ollama(cfg: dict, prompt: str, conv: Conversation, on_event, cancel, quick_model: Optional[str] = None) -> str:
+    """Local model over Ollama's HTTP API. Loopback only; the conversation is replayed from RAM.
+    quick_model: answer at once, without the model's thinking pass."""
     o, timeout = cfg["brain"]["ollama"], cfg["brain"]["timeout_s"]
     url = loopback(o["url"])
     if not url:
         return "Ollama precisa estar em localhost"
-    model = o.get("model") or first_ollama_model(o["url"])
+    model = quick_model or o.get("model") or first_ollama_model(o["url"])
     if not model:
         return "Nenhum modelo no Ollama (rode: ollama pull <modelo>)"
     messages = [{"role": r, "content": t} for r, t in conv.turns] + [{"role": "user", "content": prompt}]
-    body = json.dumps({"model": model, "messages": messages, "stream": True})
+    body = json.dumps({"model": model, "messages": messages, "stream": True, **({"think": False} if quick_model else {})})
     conn = http.client.HTTPConnection(url.hostname, url.port or 80, timeout=timeout)
     conn.connect()
     deadline = time.time() + timeout
@@ -315,6 +323,27 @@ def ollama_models(base: str) -> list[str]:
 def first_ollama_model(base: str) -> Optional[str]:
     models = ollama_models(base)
     return models[0] if models else None
+
+
+def quick_model(cfg: dict) -> Optional[str]:
+    """The local model for quick questions, if brain.quick is "local" and Ollama has it."""
+    b = cfg.get("brain", {})
+    o = b.get("ollama", {})
+    if b.get("quick", "local") != "local" or not (model := o.get("quick_model")) or not o.get("url") \
+            or model not in ollama_models(o["url"]):
+        return None
+    return model
+
+
+def quick_brain(cfg: dict) -> Optional[str]:
+    return "ollama" if quick_model(cfg) else pick(cfg)
+
+
+def warm_quick(cfg: dict) -> None:
+    """Load the quick model while the user is still talking: a cold load is ~6 s, a warm answer well under 1 s."""
+    model = quick_model(cfg)
+    if model:
+        ollama_warm(cfg, model)
 
 
 def ollama_warm(cfg: dict, model: str) -> None:
@@ -377,12 +406,13 @@ def pick(cfg: dict) -> Optional[str]:
 
 def ask(cfg: dict, prompt: str, mode: str, conv: Conversation, on_event: Callable[[Event], None] = lambda e: None,
         cancel: Optional[threading.Event] = None, dirs: tuple = ()) -> str:
-    name = pick(cfg)
+    local = quick_model(cfg) if mode == "quick" else None
+    name = "ollama" if local else pick(cfg)
     if not name:
         return "Nenhuma IA encontrada: instale Claude Code, Codex ou Ollama."
     cancel = cancel or threading.Event()
     conv = conv.current(name)
     text = prompt + QUICK if mode == "quick" else prompt
     if name == "ollama":
-        return run_ollama(cfg, text, conv, on_event, cancel)
+        return run_ollama(cfg, text, conv, on_event, cancel, local)
     return run_cli(name, cfg, text, mode, conv, on_event, cancel, dirs)

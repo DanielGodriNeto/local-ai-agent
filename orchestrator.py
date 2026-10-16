@@ -154,8 +154,8 @@ def escalate(task: str, cfg: dict, pick=None, extra_dirs=(), mode="task", on_eve
     return save_proposals(out, cfg)
 
 
-def brain_name(cfg: dict) -> str:
-    return BRAIN_NAMES.get(brains.pick(cfg) or "", "a IA")
+def brain_name(cfg: dict, mode: str = "task") -> str:
+    return BRAIN_NAMES.get((brains.quick_brain(cfg) if mode == "quick" else brains.pick(cfg)) or "", "a IA")
 
 
 SCREEN_CONTEXT = """{task}
@@ -264,7 +264,9 @@ def run_preset(text: str, decision: dict, cfg: dict, dry_run: bool, ask) -> str:
 def escalate_with_consent(decision: dict, cfg: dict, dry_run: bool, ask, pick, on_event, cancel) -> str:
     """Quick questions go straight to the AI (only your words leave; no tools). Tasks that read files ask first,
     unless brain.confirm_quick says quick ones must ask too."""
-    mode, name, toolless = decision.get("mode", "task"), brain_name(cfg), brains.pick(cfg) in brains.TOOLLESS_QUICK
+    mode = decision.get("mode", "task")
+    brain = brains.quick_brain(cfg) if mode == "quick" else brains.pick(cfg)
+    name, toolless = BRAIN_NAMES.get(brain or "", "a IA"), brain in brains.TOOLLESS_QUICK
     out = f"{name} ({mode}): {decision['task']}"
     if dry_run:
         return out + " (dry-run)"
@@ -272,6 +274,8 @@ def escalate_with_consent(decision: dict, cfg: dict, dry_run: bool, ask, pick, o
     if mode == "task" or cfg["brain"].get("confirm_quick") or not toolless:
         if not toolless:
             reach = "Ele pode LER qualquer arquivo do PC (sem alterar nada)."
+        elif brain == "ollama" and mode == "quick":
+            reach = "Nada sai do PC."
         elif mode == "task":
             reach = f"Ele so pode ler arquivos em {brains.workdir(cfg)}."
         else:
@@ -342,7 +346,7 @@ def describe(step: dict, cfg: dict) -> str:
         return f"pesquisar “{step['query'][:80]}” no navegador"
     if step["action"] == "run_preset":
         return f"executar '{step['preset']}'" + (f" ({step['game']['name']})" if step.get("game") else "")
-    return f"pedir para {brain_name(cfg)}: “{step['task'][:80]}”"
+    return f"pedir para {brain_name(cfg, step.get('mode', 'task'))}: “{step['task'][:80]}”"
 
 
 def run_steps(text: str, steps: list[dict], cfg: dict, dry_run: bool, ask, pick, on_event, cancel) -> str:

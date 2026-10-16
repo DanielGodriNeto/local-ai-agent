@@ -43,6 +43,14 @@ child processes). `daemon.mode` in the config: `leve` (default) frees the speech
 `unload_after_s` idle, about 53 MB before first use, ~400 MB while listening, ~145 MB after unloading; `rapido` keeps them
 loaded for instant start. The conversation memory survives either way. `python agentd.py --quit` stops it.
 
+## Quick questions
+
+Short questions ("quanto é 17 vezes 23?") go to a small local model when it is installed: answers in about 1 s and
+nothing leaves the PC. `ollama pull qwen3:1.7b` once; it loads while you talk. Settings > "Perguntas rápidas" (or
+`brain.quick: "main"`) sends them to the main AI's fast model instead (Claude Haiku). Without Ollama or the model, the
+main AI answers as before. Tasks always go to the main AI. Measured on an RX 7600: qwen3:1.7b 0.3 s for the whole
+answer, qwen3:8b 4.8 s, Claude Haiku over the CLI ~6.7 s.
+
 ## Chained requests
 
 "abre o terminal e me explica o que é git", "abre o navegador e pesquisa receita de bolo": up to 3 steps, split only

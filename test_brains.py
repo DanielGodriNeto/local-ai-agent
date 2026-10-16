@@ -177,3 +177,62 @@ def test_timeout_also_kills(tmp_path):
     lines = brains.stream_lines([sys.executable, "-c", CHILD], "x", tmp_path, 1, threading.Event())
     with pytest.raises(TimeoutError):
         list(lines)
+
+
+
+def quick_cfg(tmp_path, quick="local"):
+    return {"brain": {**CFG["brain"], "workdir": str(tmp_path), "quick": quick,
+                      "ollama": {"url": "http://127.0.0.1:11434", "model": "", "quick_model": "qwen3:1.7b"}}}
+
+
+def test_quick_questions_go_to_the_local_model_and_tasks_to_the_main_ai(tmp_path):
+    cfg, seen = quick_cfg(tmp_path), []
+    with mock.patch("brains.ollama_models", return_value=["qwen3:1.7b"]), \
+         mock.patch("brains.run_ollama", side_effect=lambda c, p, conv, on, cancel, model: seen.append(model) or "391"), \
+         mock.patch("shutil.which", return_value="claude"), \
+         mock.patch("brains.stream_lines", fake_stream(CLAUDE_LINES)) as stream:
+        assert brains.ask(cfg, "quanto e 17x23", "quick", brains.Conversation()) == "391"
+        assert brains.ask(cfg, "le a nota", "task", brains.Conversation()) == "abacaxi" and stream.argv
+    assert seen == ["qwen3:1.7b"]
+    with mock.patch("brains.ollama_models", return_value=[]), mock.patch("shutil.which", return_value="claude"):
+        assert brains.quick_brain(cfg) == "claude"  # Ollama not running: the main AI's fast model answers
+
+
+def test_quick_main_or_a_missing_model_uses_the_main_fast_model(tmp_path):
+    for cfg, installed in ((quick_cfg(tmp_path, "main"), ["qwen3:1.7b"]), (quick_cfg(tmp_path), ["qwen3:8b"])):
+        with mock.patch("brains.ollama_models", return_value=installed), mock.patch("shutil.which", return_value="claude"), \
+             mock.patch("brains.stream_lines", fake_stream(CLAUDE_LINES)) as stream:
+            assert brains.ask(cfg, "oi", "quick", brains.Conversation()) == "abacaxi"
+        assert stream.argv[stream.argv.index("--model") + 1] == "haiku"
+
+
+def test_a_local_quick_answer_keeps_the_claude_session():
+    conv = brains.Conversation().current("claude")
+    conv.remember("s1", "a", "b")
+    conv.current("ollama").remember(None, "c", "d")
+    assert conv.current("claude").session == "s1" and conv.current("ollama").turns == [("user", "c"), ("assistant", "d")]
+
+
+def test_local_quick_answers_skip_the_thinking_pass():
+    body = {}
+
+    class Conn:
+        def __init__(self, *a, **k):
+            self.sock = None
+
+        def connect(self):
+            pass
+
+        def request(self, method, path, data, headers):
+            body.update(json.loads(data))
+
+        def getresponse(self):
+            return [b'{"message": {"content": "391"}}']
+
+        def close(self):
+            pass
+
+    cfg = {"brain": {**CFG["brain"], "ollama": {"url": "http://127.0.0.1:11434", "model": "big"}}}
+    with mock.patch("http.client.HTTPConnection", Conn):
+        assert brains.run_ollama(cfg, "oi", brains.Conversation(), lambda e: None, threading.Event(), "small") == "391"
+    assert body["model"] == "small" and body["think"] is False

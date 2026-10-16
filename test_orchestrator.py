@@ -4,7 +4,7 @@ from unittest import mock
 import orchestrator as o
 
 CFG = o.load_config()
-CFG = {**CFG, "brain": {**CFG["brain"], "use": "claude"}}  # not whatever CLI this machine has
+CFG = {**CFG, "brain": {**CFG["brain"], "use": "claude", "quick": "main"}}  # not whatever this machine has
 
 
 def run(decision, **kw):
@@ -323,3 +323,14 @@ def test_latency_report_skips_requests_that_waited_for_the_user():
     report = o.latency_report(lines)
     assert "ai      text       2     2.00    3.00" in report and "50" not in report
     assert "Sem medições" in o.latency_report([])
+
+
+def test_a_local_quick_answer_needs_no_consent_even_when_the_main_ai_is_codex():
+    cfg = {**CFG, "brain": {**CFG["brain"], "use": "codex", "quick": "local"}}
+    asked = []
+    with mock.patch("brains.quick_model", return_value="qwen3:1.7b"), mock.patch("orchestrator.escalate", return_value="391"):
+        assert o.handle("x", cfg, decide=lambda *_: {"action": "escalate", "task": "17x23", "mode": "quick"},
+                        confirm=lambda q: asked.append(q) or True) == "391"
+        o.handle("x", cfg, decide=lambda *_: {"action": "escalate", "task": "le o log", "mode": "task"},
+                 confirm=lambda q: asked.append(q) or True)
+    assert len(asked) == 1 and "Codex" in asked[0]  # only the task asks: Codex can read any file

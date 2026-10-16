@@ -179,6 +179,9 @@ class Settings(QWidget):
         return [
             group([
                 ("Inteligência", self._combo(BRAINS, b["use"], lambda v: self._save("brain", "use", v))),
+                ("Perguntas rápidas", self._combo(
+                    {"local": "No PC (Ollama, mais rápido e privado)", "main": "Na IA principal (Haiku ou similar)"},
+                    b.get("quick", "local"), lambda v: self._save("brain", "quick", v))),
                 ("Memória", self._combo({"leve": "Leve (libera após 5 min parado)", "rapido": "Rápida (sempre pronta)"},
                                         d.get("mode", "leve"), lambda v: self._save("daemon", "mode", v))),
                 ("Avisar quando uma tarefa longa terminar", self._check(self.cfg["ui"].get("notify", True),

@@ -215,6 +215,7 @@ def session(ui: overlay.Overlay, cfg: dict, blocks: Optional[Iterator[np.ndarray
         stt, decide, *extra = models() if models else (LazyWhisper(v["model"], v["language"]), preload_intent(cfg),
                                                         speaker(cfg))
         voice = extra[0] if extra else None
+        threading.Thread(target=o.brains.warm_quick, args=(cfg,), daemon=True).start()
         def segmenter() -> Segmenter:  # one per utterance: its noise floor and the VAD state start fresh
             return Segmenter(v["silence_s"], v["no_speech_timeout_s"], v["max_s"], v["min_rms"],
                              vad=SileroVAD() if v.get("vad", "silero") == "silero" else None)

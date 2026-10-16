@@ -10,6 +10,7 @@
     "timeout_s": 600,
     "memory_idle_s": 600,
     "confirm_quick": false,
+    "quick": "local",
     "claude": {
       "model": "",
       "fast_model": "haiku",
@@ -26,7 +27,8 @@
     "ollama": {
       "url": "http://127.0.0.1:11434",
       "model": "",
-      "vision_model": "qwen3-vl:4b-instruct"
+      "vision_model": "qwen3-vl:4b-instruct",
+    "quick_model": "qwen3:1.7b"
     }
   },
   "presets": {
