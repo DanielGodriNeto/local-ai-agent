@@ -122,7 +122,7 @@
     "tts": true,
     "speed": 1.0,
     "language": "pt",
-    "silence_s": 1.0,
+    "silence_s": 0.7,
     "no_speech_timeout_s": 6,
     "max_s": 20,
     "partial_every_s": 0.8,
