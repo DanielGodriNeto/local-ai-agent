@@ -399,6 +399,30 @@ def handle(text: str, cfg: dict, decide=intent_decide, dry_run=False, yes=False,
     return out
 
 
+def latency_report(lines: list[str]) -> str:
+    """Median and worst seconds per stage, from the "latency" log entries. Requests that stopped for a question are
+    left out: the user's own pause is not latency."""
+    import statistics
+
+    rows: dict[tuple[str, str], list[float]] = {}
+    for line in lines:
+        try:
+            e = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(e, dict) or e.get("action") != "latency" or e.get("asked"):
+            continue
+        for stage in ("text", "decided", "first", "done"):
+            if isinstance(e.get(f"{stage}_s"), (int, float)):
+                rows.setdefault((str(e.get("kind")), stage), []).append(e[f"{stage}_s"])
+    if not rows:
+        return "Sem medições ainda (use o agente por voz e rode de novo)."
+    out = ["tipo    etapa     n   mediana    pior   (segundos desde o fim da fala)"]
+    for (kind, stage), xs in rows.items():
+        out.append(f"{kind:7} {stage:8} {len(xs):3} {statistics.median(xs):8.2f} {max(xs):7.2f}")
+    return "\n".join(out)
+
+
 if __name__ == "__main__":
     sys.stdout.reconfigure(encoding="utf-8")
     ap = argparse.ArgumentParser()
@@ -407,8 +431,12 @@ if __name__ == "__main__":
     ap.add_argument("--yes", action="store_true", help="skip preset confirmations")
     ap.add_argument("--yes-escalate", action="store_true", help="skip the Claude Code confirmation")
     ap.add_argument("--approve", action="store_true", help="review presets proposed by Claude")
+    ap.add_argument("--latency", action="store_true", help="seconds per stage, from agent.log.jsonl")
     a = ap.parse_args()
-    if a.approve:
+    if a.latency:
+        logs = [HERE / "agent.log.1.jsonl", HERE / "agent.log.jsonl"]
+        print(latency_report([ln for p in logs if p.exists() for ln in p.read_text(encoding="utf-8").splitlines()]))
+    elif a.approve:
         print(f"{approve()} preset(s) adicionados")
     elif a.text:
         print(handle(a.text, load_config(), dry_run=a.dry_run, yes=a.yes, yes_escalate=a.yes_escalate,

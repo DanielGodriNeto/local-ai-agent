@@ -314,3 +314,12 @@ def test_searching_this_pc_is_never_a_web_search():
     for said in ("procura nos meus arquivos", "pesquisa na pasta downloads", "busca no computador o relatório"):
         assert o.web_query(said, after_browser=True) is None
     assert o.web_query("pesquisa receita de bolo", after_browser=True) == "receita de bolo"
+
+
+def test_latency_report_skips_requests_that_waited_for_the_user():
+    lines = ['{"action": "latency", "kind": "ai", "asked": false, "text_s": 1.0, "done_s": 5.0}',
+             '{"action": "latency", "kind": "ai", "asked": false, "text_s": 3.0, "done_s": 9.0}',
+             '{"action": "latency", "kind": "ai", "asked": true, "text_s": 50.0}', "not json", '{"action": "x"}']
+    report = o.latency_report(lines)
+    assert "ai      text       2     2.00    3.00" in report and "50" not in report
+    assert "Sem medições" in o.latency_report([])
