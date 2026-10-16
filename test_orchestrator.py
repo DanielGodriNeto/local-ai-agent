@@ -308,3 +308,9 @@ def test_saying_no_to_the_ai_step_stops_the_rest_of_the_chain():
     with mock.patch("os_adapter.launch") as launch, mock.patch("orchestrator.escalate") as esc:
         out = o.handle("me explica git e abre o terminal", CFG, decide=by_word, confirm=lambda q: next(answers))
     assert out.endswith("(cancelado)") and not launch.called and not esc.called
+
+
+def test_searching_this_pc_is_never_a_web_search():
+    for said in ("procura nos meus arquivos", "pesquisa na pasta downloads", "busca no computador o relatório"):
+        assert o.web_query(said, after_browser=True) is None
+    assert o.web_query("pesquisa receita de bolo", after_browser=True) == "receita de bolo"

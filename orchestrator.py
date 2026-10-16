@@ -293,6 +293,8 @@ SEARCH = re.compile(rf"^\s*{intent.FILLER}(?:pesquis|procur|busc)[ae]r?\s+(?:(?P
                     r"(?:por\s+|sobre\s+)?(?P<q>\S.*)$", re.I | re.S)
 SEARCH_URL = "https://duckduckgo.com/?q="
 BROWSER = "open_browser"
+# "procura nos meus arquivos" is about this PC, not the web, even right after opening the browser
+ON_PC = re.compile(r"\b(?:n[oa]s?\s+(?:meus?|minhas?)\s+\w+|no\s+(?:pc|computador|disco)|n[ao]s?\s+pastas?)\b", re.I)
 
 
 def chain_parts(text: str) -> list[str]:
@@ -304,7 +306,7 @@ def chain_parts(text: str) -> list[str]:
 def web_query(part: str, after_browser: bool) -> str | None:
     """A web search: said outright ("pesquisa no google X"), or any "pesquisa X" right after opening the browser."""
     m = SEARCH.match(part)
-    if not m or not (m.group("web") or after_browser):
+    if not m or not (m.group("web") or (after_browser and not ON_PC.search(m.group("q")))):
         return None
     return m.group("q").strip().rstrip(".") or None
 
