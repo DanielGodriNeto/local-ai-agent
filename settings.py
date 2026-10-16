@@ -211,7 +211,7 @@ class Settings(QWidget):
 
     def _look(self) -> list:
         ui = self.cfg["ui"]
-        swatches, group = QWidget(), QButtonGroup(self)
+        swatches, picks = QWidget(), QButtonGroup(self)
         line = QHBoxLayout(swatches)
         line.setContentsMargins(0, 0, 0, 0)
         for name, (light, _dark) in overlay.ACCENTS.items():
@@ -224,7 +224,7 @@ class Settings(QWidget):
             b.setStyleSheet(f"QPushButton#swatch {{ background: {light}; }} "
                             "QPushButton#swatch:checked { border: 3px solid rgba(128,128,128,0.6); }")
             b.clicked.connect(lambda _=False, n=name: self._look_set("accent", n))
-            group.addButton(b)
+            picks.addButton(b)
             line.addWidget(b)
         where = next((k for k, v in POSITIONS.items() if v[0] == ui["main"]["anchor"]), "Topo")
         corner = next((k for k, v in CORNERS.items() if v[0] == ui["corner"]["anchor"]), "Inferior direito")
