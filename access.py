@@ -7,6 +7,7 @@ import contextlib
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import threading
@@ -700,11 +701,11 @@ class HyprDesk:
         self.sh(argv + [self.BUTTONS.get(button, "0xC0")])
 
     def type_text(self, t: dict, text: str) -> bool:
-        """ponytail: ydotool types through a US keymap, so accents may come out wrong; wtype would fix it."""
+        """wtype sends Unicode, so accents come out right; ydotool (the fallback) types through a US keymap."""
         self.sh(["hyprctl", "dispatch", "focuswindow", f"address:{t['hwnd']}"])
         if (self._json("activewindow") or {}).get("address") != t["hwnd"]:
             return False
-        self.sh(["ydotool", "type", "--", text])
+        self.sh((["wtype", "--"] if shutil.which("wtype") else ["ydotool", "type", "--"]) + [text])
         return True
 
     def _place(self, rect: Rect) -> None:

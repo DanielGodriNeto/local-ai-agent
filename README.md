@@ -92,7 +92,7 @@ passed to the AI as untrusted data (read-only tools, image saved only to a priva
   its centre, "clica no 5" to click a cell at once, "cancela" to close. Works with the text box too (Win+F11).
 - Admin windows are refused (Windows would silently drop the click), and nothing is clicked if the window moved or
   changed in the meantime.
-- Hyprland (untested on a real session): needs `hyprctl`, `grim`, `ydotool` with `ydotoold` running, and AT-SPI
+- Hyprland (untested on a real session): needs `hyprctl`, `grim`, `ydotool` with `ydotoold` running (`wtype` too, for accents when typing), and AT-SPI
   (`python-gobject`, and apps with accessibility on). Windows owned by root are refused.
 
 ## Config

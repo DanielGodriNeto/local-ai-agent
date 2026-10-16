@@ -1,7 +1,7 @@
 #!/usr/bin/env sh
 # One command: a private Python environment with the exact, hash-checked versions, then the first-run checks.
-# Arch: sudo pacman -S python python-gobject at-spi2-core portaudio grim ydotool   (then: systemctl --user enable --now ydotool)
-# Debian/Ubuntu: python3-gi gir1.2-atspi-2.0 libportaudio2 libegl1 libxkbcommon0 grim ydotool
+# Arch: sudo pacman -S python python-gobject at-spi2-core portaudio grim ydotool wtype   (then: systemctl --user enable --now ydotool)
+# Debian/Ubuntu: python3-gi gir1.2-atspi-2.0 libportaudio2 libegl1 libxkbcommon0 grim ydotool wtype
 set -e
 cd "$(dirname "$0")"
 if [ ! -x .venv/bin/python ]; then

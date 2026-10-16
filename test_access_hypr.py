@@ -109,3 +109,10 @@ def test_desk_factory_picks_the_adapter(monkeypatch):
 
 def test_consent_says_the_image_includes_what_covers_the_window():
     assert "por cima" in access.HyprDesk.SHOT  # grim grabs the screen area, not the window alone
+
+
+def test_typing_prefers_wtype_for_accents_and_falls_back_to_ydotool(monkeypatch):
+    for found, typer in (("/usr/bin/wtype", ["wtype", "--"]), (None, ["ydotool", "type", "--"])):
+        monkeypatch.setattr(access.shutil, "which", lambda name, found=found: found)
+        d = desk()
+        assert d.type_text({"hwnd": "0xa1"}, "olá João") and d.sh.calls[-1] == typer + ["olá João"]
