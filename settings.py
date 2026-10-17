@@ -214,13 +214,15 @@ class Settings(QWidget):
         swatches, picks = QWidget(), QButtonGroup(self)
         line = QHBoxLayout(swatches)
         line.setContentsMargins(0, 0, 0, 0)
-        for name, (light, _dark) in overlay.ACCENTS.items():
+        dark = overlay.palette(ui)["fg"] != overlay.PALETTES["light"]["fg"]
+        for name in ("system", *overlay.ACCENTS):
+            light = overlay.accent(name, dark)
             b = QPushButton()
             b.setObjectName("swatch")
             b.setCheckable(True)
-            b.setChecked(name == ui.get("accent", "blue"))
-            b.setAccessibleName(name)
-            b.setToolTip(name)
+            b.setChecked(name == ui.get("accent", "system"))
+            b.setAccessibleName("cor do sistema" if name == "system" else name)
+            b.setToolTip("Cor do sistema" if name == "system" else name)
             b.setStyleSheet(f"QPushButton#swatch {{ background: {light}; }} "
                             "QPushButton#swatch:checked { border: 3px solid rgba(128,128,128,0.6); }")
             b.clicked.connect(lambda _=False, n=name: self._look_set("accent", n))

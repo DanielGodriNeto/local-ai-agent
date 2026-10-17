@@ -13,7 +13,8 @@ import time
 from typing import Optional
 
 from PySide6.QtCore import QEasingCurve, QObject, QPoint, QPropertyAnimation, QRectF, Qt, QVariantAnimation, Signal, Slot
-from PySide6.QtGui import QColor, QCursor, QFont, QFontDatabase, QFontMetrics, QGuiApplication, QPainter, QPen
+from PySide6.QtGui import (QColor, QCursor, QFont, QFontDatabase, QFontMetrics, QGuiApplication, QPainter, QPalette,
+                           QPen)
 from PySide6.QtWidgets import (QApplication, QGraphicsDropShadowEffect, QHBoxLayout, QLabel, QLineEdit, QPushButton,
                                QScrollArea,
                                QVBoxLayout, QWidget)
@@ -34,7 +35,7 @@ ACCENTS = {  # name -> (light, dark), Apple system colours
 PALETTES = {
     "light": {"surface": (251, 251, 253, 242), "line": (0, 0, 0, 22), "fg": "#1d1d1f", "muted": "#6e6e73",
               "button": (0, 0, 0, 14), "done": "#34c759", "error": "#ff3b30"},
-    "dark": {"surface": (38, 38, 40, 238), "line": (255, 255, 255, 30), "fg": "#f5f5f7", "muted": "#98989d",
+    "dark": {"surface": (30, 30, 32, 240), "line": (255, 255, 255, 40), "fg": "#f5f5f7", "muted": "#98989d",
              "button": (255, 255, 255, 26), "done": "#30d158", "error": "#ff453a"},
 }
 
@@ -83,12 +84,40 @@ def high_contrast() -> bool:
     return bool(hc.flags & 1)
 
 
+def system_accent() -> Optional[str]:
+    """The accent colour the user picked in Windows (Settings > Personalisation > Colours), else the desktop's via Qt
+    (KDE, GNOME, Hyprland with a Qt theme). None when there is none to follow."""
+    if sys.platform == "win32":
+        import winreg
+        try:
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\DWM") as k:
+                abgr = winreg.QueryValueEx(k, "AccentColor")[0]
+            return QColor(abgr & 0xFF, (abgr >> 8) & 0xFF, (abgr >> 16) & 0xFF).name()
+        except OSError:
+            pass
+    c = app().palette().color(QPalette.ColorRole.Accent)
+    return c.name() if c.isValid() else None
+
+
+def accent(name: str, dark: bool) -> str:
+    """A named Apple colour, or the system's ("system", the default): lifted a little on a dark surface, as Apple's
+    dark-mode colours are, so it never sinks into the background."""
+    if name in ACCENTS:
+        return ACCENTS[name][dark]
+    c = QColor(system_accent() or ACCENTS["blue"][dark])
+    if dark and c.lightness() < 140:
+        c = c.lighter(135)
+    if not dark and c.lightness() > 170:
+        c = c.darker(130)
+    return c.name()
+
+
 def palette(ui: dict) -> dict:
     theme = ui.get("theme", "auto")
     if theme == "auto":
         theme = "dark" if app().styleHints().colorScheme() == Qt.ColorScheme.Dark else "light"
     p = dict(PALETTES[theme])
-    p["accent"] = ACCENTS.get(ui.get("accent", "blue"), ACCENTS["blue"])[theme == "dark"]
+    p["accent"] = accent(ui.get("accent", "system"), theme == "dark")
     p["idle"], p["hc"] = p["muted"], high_contrast()
     if p["hc"]:  # solid surface, strong edge
         p["surface"], p["line"] = p["surface"][:3] + (255,), QColor(p["fg"]).getRgb()

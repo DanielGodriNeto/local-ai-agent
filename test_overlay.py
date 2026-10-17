@@ -152,3 +152,14 @@ def test_background_question_opens_the_card_without_taking_focus():
     assert not activated
     ov.close()
     t.join(2)
+
+
+def test_the_accent_follows_the_system_and_stays_visible(monkeypatch):
+    overlay.app()
+    monkeypatch.setattr(overlay, "system_accent", lambda: "#1a3a6b")  # a dark navy Windows accent
+    assert overlay.accent("pink", True) == "#ff375f"  # a named colour stays exactly Apple's
+    lifted = overlay.QColor(overlay.accent("system", True))
+    assert lifted.lightness() > overlay.QColor("#1a3a6b").lightness()  # brighter on a dark card
+    assert overlay.accent("system", False) == "#1a3a6b"
+    monkeypatch.setattr(overlay, "system_accent", lambda: None)
+    assert overlay.accent("system", False) == overlay.ACCENTS["blue"][0]

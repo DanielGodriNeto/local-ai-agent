@@ -132,7 +132,7 @@
   },
   "ui": {
     "theme": "auto",
-    "accent": "blue",
+    "accent": "system",
     "text_scale": 1.0,
     "background_after_s": 12,
     "notify": true,
