@@ -103,9 +103,10 @@ def listen(blocks: Iterator[np.ndarray], seg: Segmenter, transcribe: Callable[[n
     pre, buf, done = deque(maxlen=3), [], threading.Event()
 
     def partials():
+        preview = getattr(transcribe, "preview", transcribe)  # a faster, rougher model just for the live text
         while not done.wait(partial_every):
             if seg.speaking and buf:
-                on_partial(transcribe(np.concatenate(buf)))
+                on_partial(preview(np.concatenate(buf)))
 
     worker = threading.Thread(target=partials, daemon=True)
     worker.start()
@@ -209,9 +210,11 @@ def whisper_path(size: str) -> str:
 class LazyWhisper:
     """Loads in the background while the user starts talking (first run downloads the model)."""
 
-    def __init__(self, model: str, language: str):
+    def __init__(self, model: str, language: str, live: str = "base"):
         self.language, self._lock, self._model = language, threading.Lock(), model
         threading.Thread(target=self._get, daemon=True).start()
+        # live text from "base" (~0.5 s a pass on CPU, vs ~1.7 s for "small"); the final text keeps the main model
+        self._live = LazyWhisper(live, language, live=live) if live != model and model in WHISPER else None
 
     def _get(self):
         with self._lock:
@@ -219,6 +222,9 @@ class LazyWhisper:
                 from faster_whisper import WhisperModel
                 self._model = WhisperModel(whisper_path(self._model), device="cpu", compute_type="int8")
             return self._model
+
+    def preview(self, audio: np.ndarray) -> str:
+        return (self._live or self)(audio)
 
     def __call__(self, audio: np.ndarray) -> str:
         segments, _ = self._get().transcribe(audio, language=self.language, beam_size=1,

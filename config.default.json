@@ -128,7 +128,7 @@
     "silence_s": 0.7,
     "no_speech_timeout_s": 6,
     "max_s": 20,
-    "partial_every_s": 0.8,
+    "partial_every_s": 0.3,
     "min_rms": 0.012
   },
   "ui": {

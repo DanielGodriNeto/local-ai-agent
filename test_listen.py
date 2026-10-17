@@ -260,3 +260,22 @@ def test_auto_gain_lifts_a_quiet_mic_and_leaves_a_loud_one():
     assert np.abs(q).max() > 0.25  # a whisper-level mic comes out at a normal level
     assert np.allclose(ld, TONE * 4)  # a loud one is untouched
     assert np.abs(L.AutoGain()(np.zeros(1600, dtype=np.float32))).max() == 0
+
+
+def test_live_text_comes_from_the_fast_model_and_the_final_from_the_main_one():
+    import time
+
+    class Two:
+        def preview(self, _a):
+            return "rapido"
+
+        def __call__(self, _a):
+            return "preciso"
+
+    def slow():
+        for b in [TONE] * 8 + [SILENCE] * 12:
+            time.sleep(0.02)
+            yield b
+    live = []
+    assert L.listen(slow(), L.Segmenter(silence_s=1.0), Two(), live.append, partial_every=0.05) == "preciso"
+    assert live and set(live) == {"rapido"}
