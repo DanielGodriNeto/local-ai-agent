@@ -119,6 +119,7 @@
   },
   "voice": {
     "model": "small",
+    "mic": "",
     "vad": "silero",
     "earcons": true,
     "tts": true,

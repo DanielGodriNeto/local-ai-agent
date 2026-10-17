@@ -17,8 +17,8 @@ from typing import Optional
 from PySide6.QtCore import QEasingCurve, QObject, QPoint, QPropertyAnimation, QRectF, Qt, QVariantAnimation, Signal, Slot
 from PySide6.QtGui import (QColor, QCursor, QFont, QFontDatabase, QFontMetrics, QGuiApplication, QPainter, QPalette,
                            QPen)
-from PySide6.QtWidgets import (QApplication, QGraphicsDropShadowEffect, QHBoxLayout, QLabel, QLineEdit, QPushButton,
-                               QScrollArea,
+from PySide6.QtWidgets import (QApplication, QGraphicsDropShadowEffect, QHBoxLayout, QLabel, QLineEdit, QMenu,
+                               QPushButton, QScrollArea,
                                QVBoxLayout, QWidget)
 
 import config
@@ -262,6 +262,7 @@ class Overlay:
         self._answer = None  # (Event, [value]) while a question/choice is pending
         self._choices, self._shown, self._anims, self._default = 0, False, [], None
         self._armed = 0.0  # keys answer a question only after this time.monotonic()
+        self._mics = None  # (names, current, pick) while the mic button shows
         self._build()
         self._bridge = Bridge(self.win)
         self._draw()
@@ -300,6 +301,28 @@ class Overlay:
         """A text box: Enter sends, Esc cancels. Returns the text, or None."""
         got = self._wait(question, "input", timeout)
         return got.strip() if isinstance(got, str) and got.strip() else None
+
+    def mic_menu(self, names: Optional[list[str]], current: str = "", pick=None) -> None:
+        """A mic button at the right of the card while listening; pick(name) gets the chosen one ("" = the system's).
+        names=None hides it."""
+        def apply():
+            self._mics = None if names is None else (names, current, pick)
+            self._draw()
+        self._do(apply)
+
+    def _open_mics(self) -> None:
+        names, current, pick = self._mics
+        p = palette(self.ui)
+        menu = QMenu(self.win)
+        menu.setStyleSheet(f"QMenu {{ background: rgba(%d,%d,%d,255); color: {p['fg']}; border-radius: 10px; padding: 6px; }}"
+                           f" QMenu::item {{ padding: 6px 16px; border-radius: 6px; }}"
+                           f" QMenu::item:selected {{ background: {p['accent']}; color: white; }}" % p["surface"][:3])
+        for name, label in (("", "Padrão do sistema"), *((n, n) for n in names)):
+            act = menu.addAction(label)
+            act.setCheckable(True)
+            act.setChecked(name == current)
+            act.triggered.connect(lambda _=False, n=name: (self.mic_menu(names, n, pick), pick(n)))
+        menu.popup(self.mic.mapToGlobal(self.mic.rect().bottomLeft()))
 
     def to_corner(self) -> None:
         """Shrink into the corner pill (a long task moving to the background); a click opens it again."""
@@ -370,6 +393,15 @@ class Overlay:
         self.button_box.setContentsMargins(0, 6, 0, 0)
         for wid in (self.cap, self.scroll, self.buttons):
             col.addWidget(wid)
+        self.mic = QPushButton("🎙")
+        self.mic.setAccessibleName("Trocar microfone")
+        self.mic.setToolTip("Trocar microfone")
+        self.mic.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.mic.clicked.connect(self._open_mics)
+        mic_box = QVBoxLayout()
+        mic_box.addWidget(self.mic)
+        mic_box.addStretch()
+        row.addLayout(mic_box)
 
     def _wait(self, question: str, options, timeout: float):
         ev, box = threading.Event(), [None]
@@ -527,13 +559,17 @@ class Overlay:
                                           else Qt.TextInteractionFlag.NoTextInteraction)
         self.scroll.setVisible(bool(self._label))
         self._buttons(p, fam)
+        self.mic.setVisible(self._mics is not None and self.kind == "main")
+        self.mic.setStyleSheet(f"QPushButton {{ background: rgba(%d,%d,%d,%d); color: {p['fg']}; border: none; "
+                               f"border-radius: 14px; min-width: 28px; min-height: 28px; font-size: 14px; }}"
+                               f" QPushButton:hover {{ background: {p['accent']}; }}" % p["button"])
         self._place(p, k, font, cap_font, reading)
 
     def _place(self, p: dict, k: dict, font: QFont, cap_font: QFont, reading: bool) -> None:
         screen = QGuiApplication.screenAt(QCursor.pos()) or QGuiApplication.primaryScreen()
         area, pad, fm = screen.availableGeometry(), k["pad"], QFontMetrics(font)
         self.card.layout().setContentsMargins(pad, pad - 4, pad + 4, pad - 4)
-        side = DOT + GAP + 2 * pad + 4
+        side = DOT + GAP + 2 * pad + 4 + (28 + GAP if self.mic.isVisibleTo(self.win) else 0)
         max_w = int(area.width() * k["max_width_pct"] / 100)
         if reading:
             max_w = min(max_w, fm.horizontalAdvance("0" * 70) + side)

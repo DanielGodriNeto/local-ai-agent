@@ -13,6 +13,7 @@ from typing import Callable, Iterator, Optional
 import numpy as np
 
 import access
+import config
 import earcons
 import intent
 import orchestrator as o
@@ -131,13 +132,54 @@ def listen(blocks: Iterator[np.ndarray], seg: Segmenter, transcribe: Callable[[n
     return transcribe(np.concatenate(buf)).strip() or None
 
 
-def mic_blocks(stop: threading.Event) -> Iterator[np.ndarray]:
+class AutoGain:
+    """Brings a quiet mic up to a normal level, so nobody has to touch the system's input volume. Follows the loudest
+    recent sound (decaying over a few seconds); never turns a loud mic down; clips instead of overflowing."""
+
+    TARGET, FLOOR, DECAY = 0.5, 0.02, 0.986  # peak aimed at; quietest level trusted (max gain 25x); per 100 ms block
+
+    def __init__(self):
+        self.level = 0.05
+
+    def __call__(self, block: np.ndarray) -> np.ndarray:
+        self.level = max(float(np.abs(block).max(initial=0.0)), self.level * self.DECAY, self.FLOOR)
+        gain = max(1.0, self.TARGET / self.level)
+        return np.clip(block * gain, -1.0, 1.0)
+
+
+def _inputs() -> list[tuple[int, str]]:
+    """(index, name) of the microphones, on the host API of the system's default one (each mic is listed once per
+    API; that one opens at 16 kHz). Never raises: no audio stack means no list."""
+    try:
+        import sounddevice as sd
+        devices = sd.query_devices()
+        api = devices[sd.default.device[0]]["hostapi"] if sd.default.device[0] >= 0 else 0
+    except Exception:  # noqa: BLE001 - PortAudio missing or no audio device at all
+        return []
+    skip = ("Microsoft Sound Mapper", "Primary Sound Capture")  # Windows aliases of the default
+    return [(i, d["name"]) for i, d in enumerate(devices)
+            if d["max_input_channels"] > 0 and d["hostapi"] == api and not d["name"].startswith(skip)]
+
+
+def mics() -> list[str]:
+    return [name for _i, name in _inputs()]
+
+
+def mic_device(name: str) -> Optional[int]:
+    """The device for a saved name; None (the system default) when it is "" or no longer plugged in."""
+    return next((i for i, n in _inputs() if n == name), None) if name else None
+
+
+def mic_blocks(stop: threading.Event, device: Optional[int] = None,
+               switch: Optional[threading.Event] = None) -> Iterator[np.ndarray]:
+    """Mic audio until stop (or switch: another mic was picked) is set."""
     import sounddevice as sd
 
     q: queue.Queue = queue.Queue()
-    with sd.InputStream(samplerate=RATE, channels=1, dtype="float32", blocksize=int(RATE * BLOCK_S),
-                        callback=lambda data, *_: q.put(data[:, 0].copy())):
-        while not stop.is_set():
+    switch, gain = switch or threading.Event(), AutoGain()
+    with sd.InputStream(samplerate=RATE, channels=1, dtype="float32", blocksize=int(RATE * BLOCK_S), device=device,
+                        callback=lambda data, *_: q.put(gain(data[:, 0].copy()))):
+        while not (stop.is_set() or switch.is_set()):
             try:
                 yield q.get(timeout=0.2)
             except queue.Empty:
@@ -219,7 +261,21 @@ def session(ui: overlay.Overlay, cfg: dict, blocks: Optional[Iterator[np.ndarray
         def segmenter() -> Segmenter:  # one per utterance: its noise floor and the VAD state start fresh
             return Segmenter(v["silence_s"], v["no_speech_timeout_s"], v["max_s"], v["min_rms"],
                              vad=SileroVAD() if v.get("vad", "silero") == "silero" else None)
-        stop, marks = threading.Event(), {}
+        stop, marks, switch = threading.Event(), {}, threading.Event()
+
+        def from_mic(on_partial, marks=None) -> Optional[str]:  # a mic picked mid-sentence starts over on it
+            while True:
+                switch.clear()
+                said = listen(blocks or mic_blocks(stop, mic_device(v.get("mic", "")), switch), segmenter(), stt,
+                              on_partial, v["partial_every_s"], marks)
+                if not switch.is_set() or stop.is_set():
+                    return said
+
+        def pick_mic(name: str) -> None:
+            v["mic"] = name
+            config.save({"voice": {"mic": name}})
+            ui.text("")
+            switch.set()
 
         def watch():
             while not (ui.closed.wait(0.1) or cancel.is_set()):
@@ -233,7 +289,9 @@ def session(ui: overlay.Overlay, cfg: dict, blocks: Optional[Iterator[np.ndarray
             if not text:
                 return ui.close()
         else:
-            text = listen(blocks or mic_blocks(stop), segmenter(), stt, ui.text, v["partial_every_s"], marks)
+            ui.mic_menu(mics(), v.get("mic", ""), pick_mic)
+            text = from_mic(ui.text, marks)
+            ui.mic_menu(None)
         marks["text"] = time.monotonic()
         if not text:
             ui.status("Nada ouvido", overlay.IDLE)
@@ -256,7 +314,7 @@ def session(ui: overlay.Overlay, cfg: dict, blocks: Optional[Iterator[np.ndarray
                 return ui.prompt(prompt)
             ui.status(prompt, overlay.LISTEN)
             earcons.play("listen", sound)
-            return listen(blocks or mic_blocks(stop), segmenter(), stt, ui.text, v["partial_every_s"])
+            return from_mic(ui.text)
 
         if (cmd := access.parse(text)):  # voice accessibility: no AI unless nothing matches, never in the background
             out = access.run({**cmd, "said": text}, cfg, access.desk(ui.gui, ui.win), hear, confirm, lambda q, opts: ui.choose(q, opts), cancel)

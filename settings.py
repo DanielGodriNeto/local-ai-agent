@@ -193,9 +193,13 @@ class Settings(QWidget):
         ]
 
     def _voice(self) -> list:
+        import listen  # sounddevice, only for this page
+
         v, w = self.cfg["voice"], self.cfg["wake"]
         return [
             group([
+                ("Microfone", self._combo({"": "Padrão do sistema", **{n: n for n in listen.mics()}}, v.get("mic", ""),
+                                          lambda x: self._save("voice", "mic", x))),
                 ("Idioma", self._combo(LANGUAGES, v["language"], lambda x: self._save("voice", "language", x))),
                 ("Falar as respostas", self._check(v.get("tts", True), lambda x: self._save("voice", "tts", x))),
                 ("Velocidade da fala", self._slider(70, 140, v.get("speed", 1.0),

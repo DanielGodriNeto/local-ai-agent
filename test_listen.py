@@ -68,6 +68,9 @@ class FakeUI:
     def hold(self, seconds):
         self.holds.append(seconds)
 
+    def mic_menu(self, names, *_a):
+        self.mics = names
+
     def close(self):
         self.closed.set()
 
@@ -233,3 +236,27 @@ def test_latency_log_has_seconds_per_stage_and_no_text(monkeypatch):
     L.log_latency("ai", {"spoken": 10.0, "text": 10.5, "decided": 10.6, "first": 11.0})
     assert seen == [{"action": "latency", "kind": "ai", "asked": False, "text_s": 0.5, "decided_s": 0.6,
                      "first_s": 1.0, "done_s": 2.0}]
+
+
+def test_the_mic_list_is_one_entry_per_mic_and_a_saved_mic_that_is_gone_falls_back(monkeypatch):
+    import sys
+    import types
+    devices = [{"name": "Microsoft Sound Mapper - Input", "max_input_channels": 2, "hostapi": 0},
+               {"name": "Microphone (USB AUDIO)", "max_input_channels": 1, "hostapi": 0},
+               {"name": "Speakers", "max_input_channels": 0, "hostapi": 0},
+               {"name": "Microphone (USB AUDIO)", "max_input_channels": 2, "hostapi": 1}]
+    fake = types.SimpleNamespace(query_devices=lambda: devices, default=types.SimpleNamespace(device=[1, 2]))
+    monkeypatch.setitem(sys.modules, "sounddevice", fake)
+    assert L.mics() == ["Microphone (USB AUDIO)"]
+    assert L.mic_device("Microphone (USB AUDIO)") == 1
+    assert L.mic_device("Headset (unplugged)") is None and L.mic_device("") is None
+
+
+def test_auto_gain_lifts_a_quiet_mic_and_leaves_a_loud_one():
+    quiet, loud = L.AutoGain(), L.AutoGain()
+    for _ in range(30):
+        q = quiet(TONE * 0.1)
+        ld = loud(TONE * 4)
+    assert np.abs(q).max() > 0.25  # a whisper-level mic comes out at a normal level
+    assert np.allclose(ld, TONE * 4)  # a loud one is untouched
+    assert np.abs(L.AutoGain()(np.zeros(1600, dtype=np.float32))).max() == 0
