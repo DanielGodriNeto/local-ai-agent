@@ -2,7 +2,7 @@
 
 Press a key, speak, and a small local model decides what to do.
 
-1. **Voice**: hotkey or "Hey Jarvis" → live transcription in a light pill at the top of the screen (faster-whisper, local). It follows the system theme, high contrast and "show animations" settings; questions come with buttons (Enter/Esc/1-9 work too).
+1. **Voice**: hotkey or "Hey Jarvis" → live transcription in a light pill at the top of the screen (faster-whisper, local). It follows the system theme (on Omarchy, the colours of whichever theme is on; Settings can switch to the plain Apple look), high contrast and "show animations" settings; questions come with buttons (Enter/Esc/1-9 work too).
 2. **Decision**: a local intent matcher ([multilingual-e5-small](https://huggingface.co/intfloat/multilingual-e5-small), int8 ONNX, ~190 MB RAM, ~5 ms per decision) compares what you said with example phrases of each preset. Questions, "stop/close" verbs, low scores and near-ties never run a preset: they go to the AI or ask you to pick.
 3. **Action**: an allowlisted *preset* runs locally (open browser, lock screen, launch a Steam game…). Anything else goes to **your own AI**, no API key: Claude Code, Codex or a local Ollama model (`brain.use`, default `auto` = first one installed). Short questions get a fast answer (Haiku on Claude); tasks that read files ask first. Answers stream in, and the AI remembers the conversation for 10 minutes (`brain.memory_idle_s`, RAM only).
 4. **Solution picker**: if the AI finds several distinct solutions it shows one button per solution (or keys 1-9), then continues.

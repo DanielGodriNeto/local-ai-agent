@@ -16,7 +16,8 @@ LANGUAGES = {"pt": "Português", "en": "English", "es": "Español", "fr": "Fran�
              "hi": "हिन्दी", "ja": "日本語", "zh": "中文"}
 BRAINS = {"auto": "Automático (o que estiver instalado)", "claude": "Claude Code", "codex": "Codex",
           "ollama": "Ollama (só local)"}
-THEMES = {"auto": "Automático", "light": "Claro", "dark": "Escuro"}
+THEMES = {"system": "Acompanhar o sistema", "auto": "Padrão (claro ou escuro)", "light": "Padrão claro",
+          "dark": "Padrão escuro"}
 POSITIONS = {"Topo": ("n", 50, 4), "Centro": ("c", 50, 45), "Base": ("s", 50, 96)}
 CORNERS = {"Inferior direito": ("se", 99, 98), "Inferior esquerdo": ("sw", 1, 98),
            "Superior direito": ("ne", 99, 2), "Superior esquerdo": ("nw", 1, 2)}
@@ -214,9 +215,10 @@ class Settings(QWidget):
         swatches, picks = QWidget(), QButtonGroup(self)
         line = QHBoxLayout(swatches)
         line.setContentsMargins(0, 0, 0, 0)
-        dark = overlay.palette(ui)["fg"] != overlay.PALETTES["light"]["fg"]
+        look = overlay.palette(ui)
         for name in ("system", *overlay.ACCENTS):
-            light = overlay.accent(name, dark)
+            light = overlay.palette({**ui, "accent": "system"})["accent"] if name == "system" \
+                else overlay.accent(name, look["dark"])
             b = QPushButton()
             b.setObjectName("swatch")
             b.setCheckable(True)
@@ -234,7 +236,7 @@ class Settings(QWidget):
         preview.clicked.connect(self._preview)
         return [
             group([
-                ("Tema", self._combo(THEMES, ui.get("theme", "auto"), lambda x: self._look_set("theme", x))),
+                ("Tema", self._combo(THEMES, ui.get("theme", "system"), lambda x: self._look_set("theme", x))),
                 ("Cor de destaque", swatches),
                 ("Tamanho do texto", self._slider(80, 160, ui.get("text_scale", 1.0),
                                                   lambda x: self._look_set("text_scale", round(x, 2)))),

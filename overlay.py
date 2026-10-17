@@ -10,6 +10,8 @@ import ctypes
 import sys
 import threading
 import time
+import tomllib
+from pathlib import Path
 from typing import Optional
 
 from PySide6.QtCore import QEasingCurve, QObject, QPoint, QPropertyAnimation, QRectF, Qt, QVariantAnimation, Signal, Slot
@@ -38,6 +40,8 @@ PALETTES = {
     "dark": {"surface": (30, 30, 32, 240), "line": (255, 255, 255, 40), "fg": "#f5f5f7", "muted": "#98989d",
              "button": (255, 255, 255, 26), "done": "#30d158", "error": "#ff453a"},
 }
+OMARCHY = ("~/.local/state/omarchy/current/theme/colors.toml",  # Omarchy 3.x
+           "~/.config/omarchy/current/theme/colors.toml")  # older releases
 
 
 def app() -> QApplication:
@@ -112,12 +116,48 @@ def accent(name: str, dark: bool) -> str:
     return c.name()
 
 
+def omarchy_colors() -> Optional[dict]:
+    """The colours of the current Omarchy theme (any of them, stock or the user's), None off Omarchy."""
+    for path in OMARCHY:
+        try:
+            with open(Path(path).expanduser(), "rb") as f:
+                c = tomllib.load(f)
+        except (OSError, tomllib.TOMLDecodeError):
+            continue
+        if all(isinstance(c.get(k), str) and QColor.isValidColorName(c[k]) for k in ("background", "foreground")):
+            return c
+    return None
+
+
+def desktop_palette(c: dict) -> dict:
+    """An Apple-style card in the desktop theme's colours: its background a touch darker, its edge a touch lighter."""
+    bg, fg = QColor(c["background"]), QColor(c["foreground"])
+    dark = c.get("mode", "dark" if bg.lightness() < 128 else "light") == "dark"
+    p = dict(PALETTES["dark" if dark else "light"])
+    pick = lambda key, default: c[key] if QColor.isValidColorName(str(c.get(key, ""))) else default  # noqa: E731
+    p["surface"] = (bg.darker(115) if dark else bg).getRgb()[:3] + (242,)
+    p["line"] = QColor(pick("lighter_background", fg.name())).lighter(130 if dark else 100).getRgb()[:3] + (90,)
+    p["fg"], p["muted"] = fg.name(), pick("dark_foreground", p["muted"])
+    p["done"], p["error"] = pick("green", p["done"]), pick("red", p["error"])
+    p["button"] = fg.getRgb()[:3] + (26 if dark else 14,)
+    p["accent"], p["dark"] = pick("accent", pick("blue", ACCENTS["blue"][dark])), dark
+    return p
+
+
 def palette(ui: dict) -> dict:
+    """theme "system" follows the desktop (an Omarchy theme's colours, else light/dark and the accent colour);
+    "auto", "light" and "dark" are the default Apple look."""
     theme = ui.get("theme", "auto")
-    if theme == "auto":
-        theme = "dark" if app().styleHints().colorScheme() == Qt.ColorScheme.Dark else "light"
-    p = dict(PALETTES[theme])
-    p["accent"] = accent(ui.get("accent", "system"), theme == "dark")
+    colors = omarchy_colors() if theme == "system" else None
+    if colors:
+        p = desktop_palette(colors)
+        if ui.get("accent", "system") in ACCENTS:
+            p["accent"] = ACCENTS[ui["accent"]][p["dark"]]
+    else:
+        if theme in ("auto", "system"):
+            theme = "dark" if app().styleHints().colorScheme() == Qt.ColorScheme.Dark else "light"
+        p = dict(PALETTES[theme])
+        p["accent"], p["dark"] = accent(ui.get("accent", "system"), theme == "dark"), theme == "dark"
     p["idle"], p["hc"] = p["muted"], high_contrast()
     if p["hc"]:  # solid surface, strong edge
         p["surface"], p["line"] = p["surface"][:3] + (255,), QColor(p["fg"]).getRgb()

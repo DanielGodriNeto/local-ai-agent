@@ -131,7 +131,7 @@
     "min_rms": 0.012
   },
   "ui": {
-    "theme": "auto",
+    "theme": "system",
     "accent": "system",
     "text_scale": 1.0,
     "background_after_s": 12,

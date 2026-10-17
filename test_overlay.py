@@ -163,3 +163,19 @@ def test_the_accent_follows_the_system_and_stays_visible(monkeypatch):
     assert overlay.accent("system", False) == "#1a3a6b"
     monkeypatch.setattr(overlay, "system_accent", lambda: None)
     assert overlay.accent("system", False) == overlay.ACCENTS["blue"][0]
+
+
+def test_the_system_theme_takes_the_omarchy_theme_colours(monkeypatch, tmp_path):
+    overlay.app()
+    theme = tmp_path / "colors.toml"
+    theme.write_text('mode = "dark"\naccent = "#89b4fa"\nbackground = "#1e1e2e"\nforeground = "#cdd6f4"\n'
+                     'lighter_background = "#313244"\nred = "#f38ba8"\n')
+    monkeypatch.setattr(overlay, "OMARCHY", (str(tmp_path / "missing.toml"), str(theme)))
+    p = overlay.palette({"theme": "system", "accent": "system"})
+    assert p["dark"] and p["accent"] == "#89b4fa" and p["fg"] == "#cdd6f4" and p["error"] == "#f38ba8"
+    assert overlay.QColor(*p["surface"]).lightness() < overlay.QColor("#1e1e2e").lightness()  # a touch darker
+    assert overlay.QColor(*p["line"][:3]).lightness() > overlay.QColor("#1e1e2e").lightness()  # edge lighter
+    assert overlay.palette({"theme": "system", "accent": "pink"})["accent"] == "#ff375f"  # a picked colour wins
+    assert overlay.palette({"theme": "light", "accent": "system"})["fg"] == overlay.PALETTES["light"]["fg"]  # default
+    theme.write_text("not toml [")
+    assert overlay.omarchy_colors() is None  # off Omarchy (or a broken file): the plain light/dark look
