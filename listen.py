@@ -207,6 +207,19 @@ def whisper_path(size: str) -> str:
     raise ValueError(f"modelo Whisper '{size}' sem versao fixa: use {' ou '.join(WHISPER)}, ou uma pasta local")
 
 
+def load_whisper(path: str):
+    """On an NVIDIA GPU (CUDA 12 + cuDNN 9 installed) when there is one, ~5-10x faster; else the CPU, int8."""
+    import ctranslate2
+    from faster_whisper import WhisperModel
+
+    if ctranslate2.get_cuda_device_count() > 0:
+        try:
+            return WhisperModel(path, device="cuda", compute_type="float16")
+        except Exception:  # noqa: BLE001 - a GPU without the CUDA libraries: the CPU still works
+            pass
+    return WhisperModel(path, device="cpu", compute_type="int8")
+
+
 class LazyWhisper:
     """Loads in the background while the user starts talking (first run downloads the model)."""
 
@@ -219,8 +232,7 @@ class LazyWhisper:
     def _get(self):
         with self._lock:
             if isinstance(self._model, str):
-                from faster_whisper import WhisperModel
-                self._model = WhisperModel(whisper_path(self._model), device="cpu", compute_type="int8")
+                self._model = load_whisper(whisper_path(self._model))
             return self._model
 
     def preview(self, audio: np.ndarray) -> str:

@@ -62,6 +62,9 @@ Clicks and typing are one request at a time.
 
 - Speech detection: Silero VAD (bundled with faster-whisper), so fans, music and clicks do not count as speech.
 - Transcription: Whisper `small` (`voice.model`; `base` is lighter and less accurate).
+  The live text comes from `base` (about 0.5 s a pass on CPU); the final text from `voice.model`. With an NVIDIA GPU, install
+  the CUDA libraries (`pip install nvidia-cublas-cu12 nvidia-cudnn-cu12`, or CUDA 12 + cuDNN 9) and it is used on its
+  own; without them it stays on the CPU.
 - Short chimes when it starts listening, hears you, finishes or fails (`voice.earcons`).
 - Spoken answers (optional): `pip install kokoro-onnx==0.6.1` then `python tts.py` (downloads ~340 MB, sha256-checked).
   Voices for pt, en, es, fr, it, hi, ja, zh follow `voice.language`. Only AI answers are spoken, up to ~400 characters;

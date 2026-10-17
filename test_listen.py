@@ -279,3 +279,21 @@ def test_live_text_comes_from_the_fast_model_and_the_final_from_the_main_one():
     live = []
     assert L.listen(slow(), L.Segmenter(silence_s=1.0), Two(), live.append, partial_every=0.05) == "preciso"
     assert live and set(live) == {"rapido"}
+
+
+def test_whisper_uses_the_gpu_when_there_is_one_and_falls_back_to_the_cpu(monkeypatch):
+    import ctranslate2
+    import faster_whisper
+    made = []
+
+    def model(path, device, compute_type):
+        made.append(device)
+        if device == "cuda":
+            raise RuntimeError("cublas64_12.dll not found")
+        return device
+    monkeypatch.setattr(faster_whisper, "WhisperModel", model)
+    monkeypatch.setattr(ctranslate2, "get_cuda_device_count", lambda: 1)
+    assert L.load_whisper("x") == "cpu" and made == ["cuda", "cpu"]
+    monkeypatch.setattr(ctranslate2, "get_cuda_device_count", lambda: 0)
+    made.clear()
+    assert L.load_whisper("x") == "cpu" and made == ["cpu"]
