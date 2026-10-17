@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 
 import intent
 
@@ -86,3 +87,11 @@ def test_fetch_model_rejects_a_tampered_download(tmp_path, monkeypatch):
     with pytest.raises(RuntimeError, match="checksum"):
         intent.fetch_model(tmp_path)
     assert not any(tmp_path.rglob("*.onnx"))  # the bad file is deleted, never loaded
+
+
+def test_a_missing_intent_model_is_downloaded_on_first_use(tmp_path, monkeypatch):
+    got = []
+    monkeypatch.setattr(intent, "fetch_model", lambda d: got.append(d) or (_ for _ in ()).throw(OSError("offline")))
+    with pytest.raises(OSError):
+        intent.E5(tmp_path)._load()
+    assert got == [tmp_path]

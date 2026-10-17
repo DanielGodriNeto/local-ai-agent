@@ -66,6 +66,8 @@ class E5:
         import onnxruntime as ort
         import sentencepiece
 
+        if not all((self.dir / f).exists() for f in MODEL_FILES):  # first run (or a fresh clone): download, verified
+            fetch_model(self.dir)
         opts = ort.SessionOptions()
         opts.intra_op_num_threads = self.threads
         # graph optimisation folds the int8 vocab table back to float32 (~400 MB instead of ~130 MB)
