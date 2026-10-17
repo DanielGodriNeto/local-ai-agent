@@ -17,9 +17,11 @@ KEYS = {1: (0x7B, "toggle", "Win+F12"), 2: (0x7A, "type", "Win+F11")}  # id: (vi
 
 def main() -> None:
     user32 = ctypes.windll.user32
-    for hid, (vk, _cmd, name) in KEYS.items():
-        if not user32.RegisterHotKey(None, hid, MOD_WIN | MOD_NOREPEAT, vk):
-            sys.exit(f"{name} is already taken by another program.")
+    taken = [name for hid, (vk, _cmd, name) in KEYS.items() if not user32.RegisterHotKey(None, hid, MOD_WIN | MOD_NOREPEAT, vk)]
+    if len(taken) == len(KEYS):
+        sys.exit(f"{' e '.join(taken)} já são usados por outro programa.")
+    for name in taken:  # one key lost to another program must not take the other one down with it
+        print(f"{name} já é usado por outro programa; o ícone da bandeja faz o mesmo.")
     print("Win+F12 talks, Win+F11 types. Ctrl+C to quit.")
     msg = wt.MSG()
     while user32.GetMessageW(ctypes.byref(msg), None, 0, 0) > 0:
