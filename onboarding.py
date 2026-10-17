@@ -73,7 +73,7 @@ class Onboarding(QWidget):
         head = QLabel("Seu assistente, no seu PC")
         head.setObjectName("title")
         col.addWidget(head)
-        col.addWidget(settings.note("Fale com Win+F12 ou dizendo “Hey Jarvis”; escreva com Win+F11. Ele usa a IA que "
+        col.addWidget(settings.note("Fale com Ctrl+Alt+Espaço ou dizendo “Hey Jarvis”; escreva com Ctrl+Alt+D. Ele usa a IA que "
                                     "você já tem, sem chave de API, e o áudio nunca sai do PC."))
         col.addWidget(settings.group([("Inteligência", QLabel(brain_status(self.cfg))),
                                       ("Microfone", QLabel(mic_status()))]))

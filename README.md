@@ -31,7 +31,7 @@ python orchestrator.py "abre o navegador" --dry-run   # text mode
 ```
 
 Hyprland: `bind = SUPER, V, exec, ~/.config/local-ai-agent/voice_trigger.sh` (talk) and `text_trigger.sh` (type)
-Windows: `python hotkey_windows.py`: Win+F12 talks, Win+F11 opens a text box (easy to bind to mouse buttons; Win+V is
+Windows: `python hotkey_windows.py`: Ctrl+Alt+Space talks, Ctrl+Alt+D opens a text box (easy to bind to mouse buttons; Win+V is
 reserved by Windows). The tray icon has the same actions, plus Settings.
 
 A task that takes longer than `ui.background_after_s` (12 s) shrinks into a pill in the corner, so you can keep
@@ -97,7 +97,7 @@ passed to the AI as untrusted data (read-only tools, image saved only to a priva
   window. Never Enter, tab or other control keys, at most 500 characters, admin windows refused, and the text is not
   logged. ("escreve …" still goes to the AI, which writes it for you.)
 - "mostrar grade": numbers 1-9 over the screen. Say a number to zoom into it, "clica" / "duplo" / "direito" to click
-  its centre, "clica no 5" to click a cell at once, "cancela" to close. Works with the text box too (Win+F11).
+  its centre, "clica no 5" to click a cell at once, "cancela" to close. Works with the text box too (Ctrl+Alt+D).
 - Admin windows are refused (Windows would silently drop the click), and nothing is clicked if the window moved or
   changed in the meantime.
 - Hyprland (untested on a real session): needs `hyprctl`, `grim`, `ydotool` with `ydotoold` running (`wtype` too, for accents when typing), and AT-SPI

@@ -230,7 +230,7 @@ def tray(commands: queue.Queue) -> Callable[[str, str], None]:
     p.drawEllipse(8, 8, 48, 48)
     p.end()
     icon = QSystemTrayIcon(QIcon(pix))
-    icon.setToolTip("Assistente · Win+F12 fala · Win+F11 escreve")
+    icon.setToolTip("Assistente · Ctrl+Alt+Espaço fala · Ctrl+Alt+D escreve")
     menu = QMenu()
     for label, cmd in (("Falar", "toggle"), ("Escrever", "type"), ("Ajustes", "settings"),
                        ("Cancelar tarefas em segundo plano", "cancel-background"), ("Sair", "quit")):
