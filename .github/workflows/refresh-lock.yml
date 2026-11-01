@@ -25,7 +25,7 @@ jobs:
       - run: uv pip compile requirements.in --universal --python-version 3.11 --generate-hashes -o requirements.txt --upgrade -q
       - id: diff
         run: echo "changed=$(git diff --quiet requirements.txt && echo no || echo yes)" >> "$GITHUB_OUTPUT"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: lock
           path: requirements.txt
